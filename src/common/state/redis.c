@@ -12,6 +12,7 @@
 #include "object_table.h"
 #include "task.h"
 #include "task_log.h"
+#include "task_table.h"
 #include "event_loop.h"
 #include "redis.h"
 #include "io.h"
@@ -407,6 +408,60 @@ void redis_task_log_subscribe(table_callback_data *callback_data) {
   if (db->sub_context->err) {
     LOG_REDIS_ERR(db->sub_context, "error in task_log_register_callback");
   }
+}
+
+void redis_task_table_add_task_callback(redisAsyncContext *c, void *r, void *privdata) {
+  REDIS_CALLBACK_HEADER(db, callback_data, r)
+  redisReply *reply = r;
+  CHECK(reply->type == REDIS_REPLY_STATUS);
+  if (callback_data->done_callback) {
+    task_table_callback done_callback = callback_data->done_callback;
+    done_callback(callback_data->data, callback_data->user_context);
+  }
+  destroy_timer_callback(db->loop, callback_data);
+}
+
+void redis_task_table_add_task(table_callback_data *callback_data) {
+  CHECK(callback_data);
+  db_handle *db = callback_data->db_handle;
+  task_spec *task = callback_data->data;
+  redisAsyncCommand(db->context, redis_task_table_add_task_callback,
+                    (void *) callback_data->timer_id, "SET task:%b %b",
+                    callback_data->id.id, UNIQUE_ID_SIZE,
+                    task, task_size(task));
+}
+
+void redis_task_table_get_task_callback(redisAsyncContext *c, void *r, void *privdata) {
+  REDIS_CALLBACK_HEADER(db, callback_data, r)
+  redisReply *reply = r;
+
+  if (reply->type == REDIS_REPLY_STRING) {
+    if (callback_data->done_callback) {
+      task_spec *task = malloc(reply->len);
+      memcpy(task, reply->str, reply->len);
+      task_table_callback done_callback = callback_data->done_callback;
+      done_callback(task, callback_data->user_context);
+      free(task);
+    }
+    destroy_timer_callback(db->loop, callback_data);
+  } else if (reply->type == REDIS_REPLY_NIL) {
+    if (callback_data->done_callback) {
+      task_table_callback done_callback = callback_data->done_callback;
+      done_callback(NULL, callback_data->user_context);
+    }
+    destroy_timer_callback(db->loop, callback_data);
+  } else {
+    LOG_ERR("expected string, received type %d", reply->type);
+    exit(-1);
+  }
+}
+
+void redis_task_table_get_task(table_callback_data *callback_data) {
+  CHECK(callback_data);
+  db_handle *db = callback_data->db_handle;
+  redisAsyncCommand(db->context, redis_task_table_get_task_callback,
+                    (void *) callback_data->timer_id, "GET task:%b",
+                    callback_data->id.id, UNIQUE_ID_SIZE);
 }
 
 int get_client_id(db_handle *db) {

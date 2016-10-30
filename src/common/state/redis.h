@@ -128,4 +128,8 @@ void redis_task_log_publish_publish_callback(redisAsyncContext *c,
  */
 void redis_task_log_subscribe(table_callback_data *callback_data);
 
+void redis_task_table_add_task(table_callback_data *callback_data);
+
+void redis_task_table_get_task(table_callback_data *callback_data);
+
 #endif /* REDIS_H */
