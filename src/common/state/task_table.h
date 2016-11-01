@@ -8,7 +8,9 @@
 /* Callback for getting and adding an entry from the task
  * table.  Task spec will be freed by the system after the
  * callback */
-typedef void (*task_table_callback)(task_spec *task, void *context);
+typedef void (*task_table_callback)(task_id task_id,
+                                    task_spec *task,
+                                    void *context);
 
 /** Add task to the task table, handle errors here. */
 void task_table_add_task(db_handle *db,

@@ -12,6 +12,112 @@ SUITE(task_table_tests);
 
 static event_loop *g_loop;
 
+/* ==== Test operations in non-failure scenario ==== */
+
+/* === A lookup of a task not in the table === */
+
+task_id lookup_nil_id;
+int lookup_nil_success = 0;
+const char *lookup_nil_context = "lookup_nil";
+
+void lookup_nil_fail_callback(unique_id id, void *user_data) {
+  /* The fail callback should not be called. */
+  CHECK(0);
+}
+
+void lookup_nil_success_callback(task_id task_id,
+                                 task_spec *task,
+                                 void *context) {
+  lookup_nil_success = 1;
+  CHECK(context == (void *) lookup_nil_context);
+  CHECK(memcmp(task_id.id, lookup_nil_id.id, UNIQUE_ID_SIZE) == 0);
+  CHECK(task == NULL);
+  event_loop_stop(g_loop);
+}
+
+TEST lookup_nil_test(void) {
+  lookup_nil_id = globally_unique_id();
+  g_loop = event_loop_create();
+  db_handle *db =
+      db_connect("127.0.0.1", 6379, "plasma_manager", "127.0.0.1", 1234);
+  db_attach(db, g_loop);
+  retry_info retry = {
+      .num_retries = 5,
+      .timeout = 1000,
+      .fail_callback = lookup_nil_fail_callback,
+  };
+  task_table_get_task(db, lookup_nil_id, &retry, lookup_nil_success_callback,
+                      (void *) lookup_nil_context);
+  /* Disconnect the database to see if the lookup times out. */
+  event_loop_run(g_loop);
+  destroy_outstanding_callbacks(g_loop);
+  event_loop_destroy(g_loop);
+  db_disconnect(db);
+  ASSERT(lookup_nil_success);
+  PASS();
+}
+
+/* === A lookup of a task after it's added returns the same spec === */
+
+int add_success = 0;
+int lookup_success = 0;
+task_id add_lookup_id;
+task_spec *add_lookup_task;
+const char *add_lookup_context = "add_lookup";
+
+void add_lookup_fail_callback(unique_id id, void *user_data) {
+  /* The fail callback should not be called. */
+  CHECK(0);
+}
+
+void lookup_success_callback(task_id task_id, task_spec *task, void *context) {
+  lookup_success = 1;
+  CHECK(context == (void *) add_lookup_context);
+  CHECK(memcmp(task_id.id, add_lookup_id.id, UNIQUE_ID_SIZE) == 0);
+  CHECK(memcmp(task, add_lookup_task, task_size(task)) == 0);
+  event_loop_stop(g_loop);
+}
+
+void add_success_callback(task_id task_id, task_spec *task, void *context) {
+  add_success = 1;
+  CHECK(memcmp(task_id.id, add_lookup_id.id, UNIQUE_ID_SIZE) == 0);
+  CHECK(task == add_lookup_task);
+
+  db_handle *db = context;
+  retry_info retry = {
+      .num_retries = 5,
+      .timeout = 1000,
+      .fail_callback = add_lookup_fail_callback,
+  };
+  task_table_get_task(db, task_id, &retry, lookup_success_callback,
+                      (void *) add_lookup_context);
+}
+
+TEST add_lookup_test(void) {
+  add_lookup_id = globally_unique_id();
+  add_lookup_task = example_task();
+  g_loop = event_loop_create();
+  db_handle *db =
+      db_connect("127.0.0.1", 6379, "plasma_manager", "127.0.0.1", 1234);
+  db_attach(db, g_loop);
+  retry_info retry = {
+      .num_retries = 5,
+      .timeout = 1000,
+      .fail_callback = add_lookup_fail_callback,
+  };
+  task_table_add_task(db, add_lookup_id, add_lookup_task, &retry,
+                      add_success_callback, (void *) db);
+  /* Disconnect the database to see if the lookup times out. */
+  event_loop_run(g_loop);
+  destroy_outstanding_callbacks(g_loop);
+  event_loop_destroy(g_loop);
+  db_disconnect(db);
+  free_task_spec(add_lookup_task);
+  ASSERT(add_success);
+  ASSERT(lookup_success);
+  PASS();
+}
+
 /* ==== Test if operations time out correctly ==== */
 
 /* === Test get task timeout === */
@@ -19,8 +125,7 @@ static event_loop *g_loop;
 const char *lookup_timeout_context = "lookup_timeout";
 int lookup_failed = 0;
 
-void lookup_done_callback(task_spec *task,
-                          void *context) {
+void lookup_done_callback(task_id task_id, task_spec *task, void *context) {
   /* The done callback should not be called. */
   CHECK(0);
 }
@@ -56,7 +161,7 @@ TEST lookup_timeout_test(void) {
 const char *add_timeout_context = "add_timeout";
 int add_failed = 0;
 
-void add_done_callback(task_spec *task, void *context) {
+void add_done_callback(task_id task_id, task_spec *task, void *context) {
   /* The done callback should not be called. */
   CHECK(0);
 }
@@ -116,7 +221,8 @@ int64_t terminate_event_loop_callback(event_loop *loop,
 const char *lookup_retry_context = "lookup_retry";
 int lookup_retry_succeeded = 0;
 
-void lookup_retry_done_callback(task_spec *task,
+void lookup_retry_done_callback(task_id task_id,
+                                task_spec *task,
                                 void *context) {
   CHECK(context == (void *) lookup_retry_context);
   lookup_retry_succeeded = 1;
@@ -161,7 +267,9 @@ TEST lookup_retry_test(void) {
 const char *add_retry_context = "add_retry";
 int add_retry_succeeded = 0;
 
-void add_retry_done_callback(task_spec *task, void *user_context) {
+void add_retry_done_callback(task_id task_id,
+                             task_spec *task,
+                             void *user_context) {
   CHECK(user_context == (void *) add_retry_context);
   add_retry_succeeded = 1;
   free_task_spec(task);
@@ -214,7 +322,8 @@ void lookup_late_fail_callback(unique_id id, void *user_context) {
   lookup_late_failed = 1;
 }
 
-void lookup_late_done_callback(task_spec *task,
+void lookup_late_done_callback(task_id task_id,
+                               task_spec *task,
                                void *context) {
   /* This function should never be called. */
   CHECK(0);
@@ -257,7 +366,9 @@ void add_late_fail_callback(unique_id id, void *user_context) {
   add_late_failed = 1;
 }
 
-void add_late_done_callback(task_spec *task, void *user_context) {
+void add_late_done_callback(task_id task_id,
+                            task_spec *task,
+                            void *user_context) {
   /* This function should never be called. */
   CHECK(0);
 }
@@ -289,12 +400,17 @@ TEST add_late_test(void) {
 }
 
 SUITE(task_table_tests) {
-  RUN_TEST(lookup_timeout_test);
-  RUN_TEST(add_timeout_test);
-  RUN_TEST(lookup_retry_test);
-  RUN_TEST(add_retry_test);
-  RUN_TEST(lookup_late_test);
-  RUN_TEST(add_late_test);
+  redisContext *context = redisConnect("127.0.0.1", 6379);
+  freeReplyObject(redisCommand(context, "FLUSHALL"));
+  RUN_REDIS_TEST(context, lookup_nil_test);
+  RUN_REDIS_TEST(context, add_lookup_test);
+  RUN_REDIS_TEST(context, lookup_timeout_test);
+  RUN_REDIS_TEST(context, add_timeout_test);
+  RUN_REDIS_TEST(context, lookup_retry_test);
+  RUN_REDIS_TEST(context, add_retry_test);
+  RUN_REDIS_TEST(context, lookup_late_test);
+  RUN_REDIS_TEST(context, add_late_test);
+  redisFree(context);
 }
 
 GREATEST_MAIN_DEFS();
