@@ -846,8 +846,8 @@ void process_message(event_loop *loop,
         .timeout = MANAGER_TIMEOUT,
         .fail_callback = NULL,
     };
-    object_table_add(conn->manager_state->db, req->object_ids[0], &retry, NULL,
-                     NULL);
+    object_table_add_location(conn->manager_state->db, req->object_ids[0],
+                              &retry, NULL, NULL);
     break;
   case DISCONNECT_CLIENT: {
     LOG_INFO("Disconnecting client on fd %d", client_sock);
