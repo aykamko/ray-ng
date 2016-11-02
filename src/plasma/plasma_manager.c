@@ -682,8 +682,8 @@ void process_fetch_request(client_connection *client_conn,
       .fail_callback = (table_fail_callback) send_client_failure_reply,
   };
   /* Request a transfer from a plasma manager that has this object. */
-  object_table_lookup(client_conn->manager_state->db, object_id, &retry,
-                      request_transfer, client_conn);
+  object_table_lookup_location(client_conn->manager_state->db, object_id,
+                               &retry, request_transfer, client_conn);
 }
 
 void process_fetch_requests(client_connection *client_conn,
