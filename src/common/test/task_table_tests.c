@@ -20,7 +20,9 @@ task_id lookup_nil_id;
 int lookup_nil_success = 0;
 const char *lookup_nil_context = "lookup_nil";
 
-void lookup_nil_fail_callback(unique_id id, void *user_data) {
+void lookup_nil_fail_callback(unique_id id,
+                              void *user_context,
+                              void *user_data) {
   /* The fail callback should not be called. */
   CHECK(0);
 }
@@ -50,9 +52,9 @@ TEST lookup_nil_test(void) {
                       (void *) lookup_nil_context);
   /* Disconnect the database to see if the lookup times out. */
   event_loop_run(g_loop);
+  db_disconnect(db);
   destroy_outstanding_callbacks(g_loop);
   event_loop_destroy(g_loop);
-  db_disconnect(db);
   ASSERT(lookup_nil_success);
   PASS();
 }
@@ -65,7 +67,9 @@ task_id add_lookup_id;
 task_spec *add_lookup_task;
 const char *add_lookup_context = "add_lookup";
 
-void add_lookup_fail_callback(unique_id id, void *user_data) {
+void add_lookup_fail_callback(unique_id id,
+                              void *user_context,
+                              void *user_data) {
   /* The fail callback should not be called. */
   CHECK(0);
 }
@@ -109,9 +113,9 @@ TEST add_lookup_test(void) {
                       add_success_callback, (void *) db);
   /* Disconnect the database to see if the lookup times out. */
   event_loop_run(g_loop);
+  db_disconnect(db);
   destroy_outstanding_callbacks(g_loop);
   event_loop_destroy(g_loop);
-  db_disconnect(db);
   free_task_spec(add_lookup_task);
   ASSERT(add_success);
   ASSERT(lookup_success);
@@ -130,9 +134,9 @@ void lookup_done_callback(task_id task_id, task_spec *task, void *context) {
   CHECK(0);
 }
 
-void lookup_fail_callback(unique_id id, void *user_data) {
+void lookup_fail_callback(unique_id id, void *user_context, void *user_data) {
   lookup_failed = 1;
-  CHECK(user_data == (void *) lookup_timeout_context);
+  CHECK(user_context == (void *) lookup_timeout_context);
   event_loop_stop(g_loop);
 }
 
@@ -166,9 +170,9 @@ void add_done_callback(task_id task_id, task_spec *task, void *context) {
   CHECK(0);
 }
 
-void add_fail_callback(unique_id id, void *user_data) {
+void add_fail_callback(unique_id id, void *user_context, void *user_data) {
   add_failed = 1;
-  CHECK(user_data == (void *) add_timeout_context);
+  CHECK(user_context == (void *) add_timeout_context);
   event_loop_stop(g_loop);
 }
 
@@ -228,7 +232,9 @@ void lookup_retry_done_callback(task_id task_id,
   lookup_retry_succeeded = 1;
 }
 
-void lookup_retry_fail_callback(unique_id id, void *user_data) {
+void lookup_retry_fail_callback(unique_id id,
+                                void *user_context,
+                                void *user_data) {
   /* The fail callback should not be called. */
   CHECK(0);
 }
@@ -275,7 +281,9 @@ void add_retry_done_callback(task_id task_id,
   free_task_spec(task);
 }
 
-void add_retry_fail_callback(unique_id id, void *user_data) {
+void add_retry_fail_callback(unique_id id,
+                             void *user_context,
+                             void *user_data) {
   /* The fail callback should not be called. */
   CHECK(0);
 }
@@ -317,7 +325,9 @@ TEST add_retry_test(void) {
 const char *lookup_late_context = "lookup_late";
 int lookup_late_failed = 0;
 
-void lookup_late_fail_callback(unique_id id, void *user_context) {
+void lookup_late_fail_callback(unique_id id,
+                               void *user_context,
+                               void *user_data) {
   CHECK(user_context == (void *) lookup_late_context);
   lookup_late_failed = 1;
 }
@@ -361,9 +371,11 @@ TEST lookup_late_test(void) {
 const char *add_late_context = "add_late";
 int add_late_failed = 0;
 
-void add_late_fail_callback(unique_id id, void *user_context) {
+void add_late_fail_callback(unique_id id, void *user_context, void *user_data) {
   CHECK(user_context == (void *) add_late_context);
   add_late_failed = 1;
+  task_spec *task = user_data;
+  free_task_spec(task);
 }
 
 void add_late_done_callback(task_id task_id,

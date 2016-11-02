@@ -54,7 +54,7 @@ void lookup_done_callback(object_id object_id,
 void add_done_callback(object_id object_id, void *user_context) {}
 
 /* Test if we got a timeout callback if we couldn't connect database. */
-void timeout_callback(object_id object_id, void *context) {
+void timeout_callback(object_id object_id, void *context, void *user_data) {
   user_context *uc = (user_context *) context;
   CHECK(uc->test_number == TEST_NUMBER)
 }

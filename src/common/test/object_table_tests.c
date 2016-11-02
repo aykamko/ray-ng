@@ -20,7 +20,9 @@ object_id new_object_id;
 task_id new_object_task_id;
 task_spec *new_object_task_spec;
 
-void new_object_fail_callback(unique_id id, void *user_data) {
+void new_object_fail_callback(unique_id id,
+                              void *user_context,
+                              void *user_data) {
   new_object_failed = 1;
   event_loop_stop(g_loop);
 }
@@ -156,9 +158,9 @@ void lookup_done_callback(object_id object_id,
   CHECK(0);
 }
 
-void lookup_fail_callback(unique_id id, void *user_data) {
+void lookup_fail_callback(unique_id id, void *user_context, void *user_data) {
   lookup_failed = 1;
-  CHECK(user_data == (void *) lookup_timeout_context);
+  CHECK(user_context == (void *) lookup_timeout_context);
   event_loop_stop(g_loop);
 }
 
@@ -192,9 +194,9 @@ void add_done_callback(object_id object_id, void *user_context) {
   CHECK(0);
 }
 
-void add_fail_callback(unique_id id, void *user_data) {
+void add_fail_callback(unique_id id, void *user_context, void *user_data) {
   add_failed = 1;
-  CHECK(user_data == (void *) add_timeout_context);
+  CHECK(user_context == (void *) add_timeout_context);
   event_loop_stop(g_loop);
 }
 
@@ -228,9 +230,11 @@ void subscribe_done_callback(object_id object_id, void *user_context) {
   CHECK(0);
 }
 
-void subscribe_fail_callback(unique_id id, void *user_data) {
+void subscribe_fail_callback(unique_id id,
+                             void *user_context,
+                             void *user_data) {
   subscribe_failed = 1;
-  CHECK(user_data == (void *) subscribe_timeout_context);
+  CHECK(user_context == (void *) subscribe_timeout_context);
   event_loop_stop(g_loop);
 }
 
@@ -295,7 +299,9 @@ void lookup_retry_done_callback(object_id object_id,
   free(manager_vector);
 }
 
-void lookup_retry_fail_callback(unique_id id, void *user_data) {
+void lookup_retry_fail_callback(unique_id id,
+                                void *user_context,
+                                void *user_data) {
   /* The fail callback should not be called. */
   CHECK(0);
 }
@@ -339,7 +345,9 @@ void add_retry_done_callback(object_id object_id, void *user_context) {
   add_retry_succeeded = 1;
 }
 
-void add_retry_fail_callback(unique_id id, void *user_data) {
+void add_retry_fail_callback(unique_id id,
+                             void *user_context,
+                             void *user_data) {
   /* The fail callback should not be called. */
   CHECK(0);
 }
@@ -398,7 +406,9 @@ void subscribe_retry_done_callback(object_id object_id, void *user_context) {
   subscribe_retry_succeeded = 1;
 }
 
-void subscribe_retry_fail_callback(unique_id id, void *user_data) {
+void subscribe_retry_fail_callback(unique_id id,
+                                   void *user_context,
+                                   void *user_data) {
   /* The fail callback should not be called. */
   CHECK(0);
 }
@@ -441,7 +451,9 @@ TEST subscribe_retry_test(void) {
 const char *lookup_late_context = "lookup_late";
 int lookup_late_failed = 0;
 
-void lookup_late_fail_callback(unique_id id, void *user_context) {
+void lookup_late_fail_callback(unique_id id,
+                               void *user_context,
+                               void *user_data) {
   CHECK(user_context == (void *) lookup_late_context);
   lookup_late_failed = 1;
 }
@@ -486,7 +498,7 @@ TEST lookup_late_test(void) {
 const char *add_late_context = "add_late";
 int add_late_failed = 0;
 
-void add_late_fail_callback(unique_id id, void *user_context) {
+void add_late_fail_callback(unique_id id, void *user_context, void *user_data) {
   CHECK(user_context == (void *) add_late_context);
   add_late_failed = 1;
 }
@@ -526,7 +538,9 @@ TEST add_late_test(void) {
 const char *subscribe_late_context = "subscribe_late";
 int subscribe_late_failed = 0;
 
-void subscribe_late_fail_callback(unique_id id, void *user_context) {
+void subscribe_late_fail_callback(unique_id id,
+                                  void *user_context,
+                                  void *user_data) {
   CHECK(user_context == (void *) subscribe_late_context);
   subscribe_late_failed = 1;
 }
@@ -570,7 +584,9 @@ const char *subscribe_success_context = "subscribe_success";
 int subscribe_success_done = 0;
 int subscribe_success_succeeded = 0;
 
-void subscribe_success_fail_callback(unique_id id, void *user_context) {
+void subscribe_success_fail_callback(unique_id id,
+                                     void *user_context,
+                                     void *user_data) {
   /* This function should never be called. */
   CHECK(0);
 }
