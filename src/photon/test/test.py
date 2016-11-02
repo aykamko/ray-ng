@@ -14,6 +14,9 @@ import plasma
 
 USE_VALGRIND = False
 
+def random_object_id():
+  return photon.ObjectID("".join([chr(random.randint(0, 255)) for _ in range(plasma.PLASMA_ID_SIZE)]))
+
 class TestPhotonClient(unittest.TestCase):
 
   def setUp(self):
@@ -94,7 +97,7 @@ class TestPhotonClient(unittest.TestCase):
 
     for args in args_list:
       for num_return_vals in [0, 1, 2, 3, 5, 10, 100]:
-        task = photon.Task(function_id, args, num_return_vals)
+        task = photon.Task(function_id, args, num_return_vals, random_object_id(), 0)
         # Submit a task.
         self.photon_client.submit(task)
         # Get the task.
@@ -113,7 +116,7 @@ class TestPhotonClient(unittest.TestCase):
     # Submit all of the tasks.
     for args in args_list:
       for num_return_vals in [0, 1, 2, 3, 5, 10, 100]:
-        task = photon.Task(function_id, args, num_return_vals)
+        task = photon.Task(function_id, args, num_return_vals, random_object_id(), 0)
         self.photon_client.submit(task)
     # Get all of the tasks.
     for args in args_list:
@@ -125,7 +128,7 @@ class TestPhotonClient(unittest.TestCase):
     object_id = photon.ObjectID(20 * chr(0))
     # TODO(rkn): This should be a FunctionID.
     function_id = photon.ObjectID(20 * "a")
-    task = photon.Task(function_id, [object_id], 0)
+    task = photon.Task(function_id, [object_id], 0, random_object_id(), 0)
     self.photon_client.submit(task)
     # Launch a thread to get the task.
     def get_task():

@@ -112,7 +112,44 @@ PyTypeObject PyObjectIDType = {
 
 /* Define the PyTask class. */
 
-static int PyTask_init(PyTask *self, PyObject *args, PyObject *kwds) {
+/**
+ * This is a function for computing a task ID. This should be done before the
+ * return object IDs have been added to the task spec.
+ */
+task_id task_id_hash(task_spec *task,
+                     int64_t task_spec_length,
+                     task_id *parent_task_id,
+                     int parent_counter) {
+  task_id task_id;
+  memset((void *) &task_id, 0, sizeof(task_id));
+  char *current_hash = (char *) &task_id;
+  /* Incorporate the task spec. */
+  for (int i = 0; i < task_spec_length; ++i) {
+    current_hash[i] ^= ((char *) task)[i];
+  }
+  /* Incorporate the parent task ID. */
+  for (int i = 0; i < sizeof(task_id); ++i) {
+    current_hash[i] ^= ((char *) parent_task_id)[i];
+  }
+  /* Incorporate the parent counter. */
+  current_hash[0] ^= parent_counter;
+  current_hash[1] ^= (parent_counter + 1);
+  current_hash[2] ^= (parent_counter + 2);
+  current_hash[3] ^= (parent_counter + 4);
+  return task_id;
+}
+
+object_id task_return_id(task_id task_id, int return_index) {
+  /* TODO(rkn): This doesn't work with more than 256 arguments. */
+  CHECK(return_index < 256);
+  object_id object_id;
+  memset((void *) &object_id, 0, sizeof(object_id));
+  char *hash = (char *) &object_id;
+  hash[sizeof(task_id) - 1] = (char) return_index;
+  return object_id;
+}
+
+static int PyTask_init(PyTask *self, PyObject *args) {
   function_id function_id;
   /* Arguments of the task (can be PyObjectIDs or Python values). */
   PyObject *arguments;
@@ -120,8 +157,13 @@ static int PyTask_init(PyTask *self, PyObject *args, PyObject *kwds) {
   UT_array *val_repr_ptrs;
   utarray_new(val_repr_ptrs, &ut_ptr_icd);
   int num_returns;
-  if (!PyArg_ParseTuple(args, "O&Oi", &PyObjectToUniqueID, &function_id,
-                        &arguments, &num_returns)) {
+  /* The ID of the task that called this task. */
+  task_id parent_task_id;
+  /* The number of tasks that the parent task has called prior to this one. */
+  int parent_counter;
+  if (!PyArg_ParseTuple(args, "O&OiO&i", &PyObjectToUniqueID, &function_id,
+                        &arguments, &num_returns, &PyObjectToUniqueID,
+                        &parent_task_id, &parent_counter)) {
     return -1;
   }
   size_t size = PyList_Size(arguments);
@@ -154,13 +196,15 @@ static int PyTask_init(PyTask *self, PyObject *args, PyObject *kwds) {
     }
   }
   utarray_free(val_repr_ptrs);
+  /* Compute a hash to use for the task ID. This is done before the return
+   * values or the arguments. TODO(rkn): This hash is bs, so use a real one. */
+  task_id current_task_id = task_id_hash(self->spec,
+                                         task_size(self->spec),
+                                         &parent_task_id,
+                                         parent_counter);
   /* Generate and add the object IDs for the return values. */
   for (size_t i = 0; i < num_returns; ++i) {
-    /* TODO(rkn): Later, this should be computed as a deterministic hash of (1)
-     * the contents of the task, (2) the index i, and (3) a counter of the
-     * number of tasks launched so far by the parent task. For now, we generate
-     * it randomly. */
-    *task_return(self->spec, i) = globally_unique_id();
+    *task_return(self->spec, i) = task_return_id(current_task_id, i);
   }
   return 0;
 }
