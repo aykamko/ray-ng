@@ -1,7 +1,7 @@
 #include "greatest.h"
 
 #include "event_loop.h"
-#include "example_task.h"
+#include "test_common.h"
 #include "common.h"
 #include "state/task_table.h"
 #include "state/redis.h"
@@ -400,17 +400,14 @@ TEST add_late_test(void) {
 }
 
 SUITE(task_table_tests) {
-  redisContext *context = redisConnect("127.0.0.1", 6379);
-  freeReplyObject(redisCommand(context, "FLUSHALL"));
-  RUN_REDIS_TEST(context, lookup_nil_test);
-  RUN_REDIS_TEST(context, add_lookup_test);
-  RUN_REDIS_TEST(context, lookup_timeout_test);
-  RUN_REDIS_TEST(context, add_timeout_test);
-  RUN_REDIS_TEST(context, lookup_retry_test);
-  RUN_REDIS_TEST(context, add_retry_test);
-  RUN_REDIS_TEST(context, lookup_late_test);
-  RUN_REDIS_TEST(context, add_late_test);
-  redisFree(context);
+  RUN_REDIS_TEST(lookup_nil_test);
+  RUN_REDIS_TEST(add_lookup_test);
+  RUN_REDIS_TEST(lookup_timeout_test);
+  RUN_REDIS_TEST(add_timeout_test);
+  RUN_REDIS_TEST(lookup_retry_test);
+  RUN_REDIS_TEST(add_retry_test);
+  RUN_REDIS_TEST(lookup_late_test);
+  RUN_REDIS_TEST(add_late_test);
 }
 
 GREATEST_MAIN_DEFS();
