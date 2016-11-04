@@ -40,7 +40,9 @@ void free_eviction_state(eviction_state *state);
  */
 void handle_before_create(eviction_state *eviction_state,
                           plasma_store_info *plasma_store_info,
-                          int64_t size);
+                          int64_t size,
+                          int64_t *num_objects_to_evict,
+                          object_id **objects_to_evict);
 
 /**
  * This method will be called whenever remove_client_from_object_clients is
@@ -54,7 +56,9 @@ void handle_before_create(eviction_state *eviction_state,
  */
 void handle_add_client(eviction_state *eviction_state,
                        plasma_store_info *plasma_store_info,
-                       object_table_entry *entry);
+                       object_id obj_id,
+                       int64_t *num_objects_to_evict,
+                       object_id **objects_to_evict);
 
 /**
  * This method will be called whenever add_client_to_object_clients is called in
@@ -68,7 +72,9 @@ void handle_add_client(eviction_state *eviction_state,
  */
 void handle_remove_client(eviction_state *eviction_state,
                           plasma_store_info *plasma_store_info,
-                          object_table_entry *entry);
+                          object_id obj_id,
+                          int64_t *num_objects_to_evict,
+                          object_id **objects_to_evict);
 
 /**
  * This method will be called whenever delete is called in the Plasma store.
@@ -79,9 +85,11 @@ void handle_remove_client(eviction_state *eviction_state,
  * @param object_id The object_id of the object to delete.
  * @return Void.
  */
-void handle_delete(eviction_state *eviction_state,
-                   plasma_store_info *plasma_store_info,
-                   object_id object_id);
+// void handle_delete(eviction_state *eviction_state,
+//                    plasma_store_info *plasma_store_info,
+//                    object_id object_id,
+//                    int64_t *num_objects_to_evict,
+//                    object_id **objects_to_evict);
 
 /**
  * Remove the least recently released objects to try to free up some space.
@@ -96,6 +104,8 @@ void handle_delete(eviction_state *eviction_state,
  */
 int64_t evict_objects(eviction_state *eviction_state,
                       plasma_store_info *plasma_store_info,
-                      int64_t num_bytes_required);
+                      int64_t num_bytes_required,
+                      int64_t *num_objects_to_evict,
+                      object_id **objects_to_evict);
 
 #endif /* EVICTION_POLICY_H */
