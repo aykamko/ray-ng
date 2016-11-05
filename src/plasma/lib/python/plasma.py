@@ -313,6 +313,18 @@ class PlasmaClient(object):
 
     return np.take(merged, range(start, end), axis=shard_axis)
 
+  def push(self, kv_store_id, interval, np_data, version=0):
+    assert type(interval) is tuple and len(interval) == 2
+
+    self.client.plasma_push(
+      self.plasma_conn,
+      make_plasma_id(kv_store_id),
+      interval[0],
+      interval[1],
+      np_data.size,
+      np_data.ctypes.data_as(ctypes.c_void_p)
+    )
+
 DEFAULT_PLASMA_STORE_MEMORY = 10 ** 9
 
 def random_name():
@@ -412,4 +424,25 @@ if __name__ == '__main__':
     assert (yf == foo[..., 5:15]).all()
     print 'F-style slicing works!'
 
-  slice_test()
+  def push_test():
+    foo = np.arange(1000000).reshape((1000, 1000)).astype(np.float64)
+
+    id_a = "a" * 20
+    x.init_kvstore(id_a, foo)
+    update = foo[10:20]
+
+    x.push(id_a, (0, 10), update)
+
+    assert (x.pull(id_a, (0, 10)) == update).all()
+    print 'Update 1st shard success.'
+
+    x.push(id_a, (63, 73), update)
+    assert (x.pull(id_a, (63, 73)) == update).all()
+    print 'Update across multiple shards success.'
+
+    x.push(id_a, (0, 1000), foo)
+    assert (x.pull(id_a, (0, 1000)) == foo).all()
+    print 'Reset back to foo success.'
+
+  # slice_test()
+  push_test()
