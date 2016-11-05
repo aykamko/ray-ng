@@ -11,6 +11,7 @@ Addr = ctypes.c_ubyte * 4
 PLASMA_ID_SIZE = 20
 PLASMA_WAIT_TIMEOUT = 2 ** 30
 
+
 class PlasmaBuffer(object):
   """This is the type of objects returned by calls to get with a PlasmaClient.
 
@@ -25,6 +26,7 @@ class PlasmaBuffer(object):
     plasma_client (PlasmaClient): The PlasmaClient that we use to communicate
       with the store and manager.
   """
+
   def __init__(self, buff, plasma_id, plasma_client):
     """Initialize a PlasmaBuffer."""
     self.buffer = buff
@@ -403,7 +405,8 @@ def start_plasma_manager(store_name, redis_address, num_retries=20, use_valgrind
                "-p", str(port),
                "-r", redis_address]
     if use_valgrind:
-      process = subprocess.Popen(["valgrind", "--track-origins=yes", "--leak-check=full", "--show-leak-kinds=all", "--error-exitcode=1"] + command)
+      process = subprocess.Popen(["valgrind", "--track-origins=yes", "--leak-check=full",
+                                  "--show-leak-kinds=all", "--error-exitcode=1"] + command)
     elif run_profiler:
       process = subprocess.Popen(["valgrind", "--tool=callgrind"] + command)
     else:
