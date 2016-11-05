@@ -63,7 +63,7 @@ class PlasmaPullResult(ctypes.Structure):
     ("ndim", ctypes.c_uint64),
     ("shard_sizes", ctypes.POINTER(ctypes.c_uint64)),
     ("start_axis_idx", ctypes.c_uint64),
-    ("shard_axis", ctypes.c_uint64),
+    ("shard_order", ctypes.c_char),
   ]
 
 
@@ -234,6 +234,92 @@ class PlasmaClient(object):
         break
     return message_data
 
+  def init_kvstore(self, kv_store_id, np_data, shard_order='C', shard_size=10):
+    assert type(np_data) is np.ndarray
+    assert shard_order in ['C', 'F']
+
+    if shard_order == 'C' and not np_data.flags.c_contiguous:
+      np_data = np.ascontiguousarray(np_data)
+    elif shard_order == 'F' and not np_data.flags.f_contiguous:
+      np_data = np.asfortranarray(np_data)
+
+    shard_axis = 0 if shard_order == 'C' else -1
+    axis_len = np_data.shape[shard_axis]
+    num_shards = axis_len / shard_size
+
+    # TODO: think about storing numpy array shape and handle n-dimension matrices
+    partitions = np.split(np_data, num_shards, axis=shard_axis)
+    partition_lengths = np.array([p.size for p in partitions], dtype=np.uint64)
+    void_p_partitions = np.array([p.ctypes.data_as(ctypes.c_void_p).value for p in partitions])
+    shape = np_data.ctypes.shape
+
+    void_handle_arr = void_p_partitions.ctypes.data_as(ctypes.c_void_p)
+    shard_sizes_ptr = partition_lengths.ctypes.data_as(ctypes.POINTER(ctypes.c_uint64))
+
+    self.client.plasma_init_kvstore(
+      self.plasma_conn,
+      make_plasma_id(kv_store_id),
+      void_handle_arr,
+      shard_sizes_ptr,
+      len(partitions),
+      ctypes.c_char(shard_order),
+      shape,
+      np_data.ndim
+    )
+
+  def pull(self, kv_store_id, interval):
+    assert type(interval) is tuple and len(interval) == 2
+
+    pull_result = PlasmaPullResult()
+
+    self.client.plasma_pull(
+      self.plasma_conn,
+      make_plasma_id(kv_store_id),
+      interval[0],
+      interval[1],
+      ctypes.byref(pull_result)
+    )
+
+    # TODO: do this slicing in C
+
+    num_shards = pull_result.num_shards
+    ndim = pull_result.ndim
+    shard_order = str(pull_result.shard_order)
+    shard_axis = 0 if shard_order == 'C' else -1
+    void_ptr_size = ctypes.sizeof(ctypes.c_void_p)
+
+    shard_ptr_buf_size = ctypes.c_int64(num_shards * void_ptr_size)
+    shape_buf_size = ctypes.c_int64(ndim * 8) # will always use uint64_t for sizes
+
+    shards_handle_buf = self.buffer_from_memory(pull_result.shards_handle, shard_ptr_buf_size)
+    shards_handle = np.frombuffer(shards_handle_buf, dtype=np.uint64, count=num_shards)
+
+    shard_bytes_sizes_buf = self.buffer_from_memory(pull_result.shard_sizes, shard_ptr_buf_size)
+    shard_sizes = np.frombuffer(shard_bytes_sizes_buf, dtype=np.uint64, count=num_shards)
+
+    shape_buf = self.buffer_from_memory(pull_result.shape, shape_buf_size)
+    shape = np.frombuffer(shape_buf, dtype=np.uint64, count=ndim)
+
+    shard_shape = np.array(shape) # make a copy
+    shards = []
+    for i in range(num_shards):
+      shard_data_buf = self.buffer_from_read_write_memory(
+        ctypes.cast(int(shards_handle[i]), ctypes.POINTER(ctypes.c_double)), # TODO: generic datatype
+        ctypes.c_int64(int(shard_sizes[i]) * 8),
+      )
+      shard_shape[shard_axis] = int(shard_sizes[i] / shape[shard_axis])
+      shards.append(np.frombuffer(
+        shard_data_buf,
+        dtype=np.float64,
+        count=shard_sizes[i],
+      ).reshape(shard_shape, order=shard_order))
+
+    merged = np.concatenate(shards, axis=shard_axis)
+    start = int(interval[0] - pull_result.start_axis_idx)
+    end = int(start + (interval[1] - interval[0]))
+
+    return np.take(merged, range(start, end), axis=shard_axis)
+
 DEFAULT_PLASMA_STORE_MEMORY = 10 ** 9
 
 def random_name():
@@ -314,6 +400,7 @@ def start_plasma_manager(store_name, redis_address, num_retries=20, use_valgrind
     counter += 1
   raise Exception("Couldn't start plasma manager.")
 
+<<<<<<< HEAD
 def init_kvstore(self, kv_store_id, np_data, shard_axis=0, shard_size=10):
   assert type(np_data) is np.ndarray
   assert shard_axis <= len(np_data.shape)
@@ -396,6 +483,20 @@ def pull(self, kv_store_id, interval):
 # TODO: remove
 if __name__ == '__main__':
   x = PlasmaClient('/tmp/plasma_socket')
-  id = "a" * 20
-  foo = np.arange(1000000).reshape((1000, 1000)).astype(np.float64)
-  x.init_kvstore(id, foo)
+
+  def slice_test():
+    foo = np.arange(1000000).reshape((1000, 1000)).astype(np.float64)
+
+    id_c = "c" * 20
+    x.init_kvstore(id_c, foo)
+    yc = x.pull(id_c, (5, 15))
+    assert (yc == foo[5:15]).all()
+    print 'C-style slicing works!'
+
+    id_f = "f" * 20
+    x.init_kvstore(id_f, foo, shard_order='F')
+    yf = x.pull(id_f, (5, 15))
+    assert (yf == foo[..., 5:15]).all()
+    print 'F-style slicing works!'
+
+  slice_test()
