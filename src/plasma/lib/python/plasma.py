@@ -318,7 +318,8 @@ class PlasmaClient(object):
       ).reshape(shard_shape, order=shard_order))
 
     merged = np.concatenate(shards, axis=shard_axis)
-    start = int(interval[0] - pull_result.start_axis_idx)
+    shard_length = shape[shard_axis] / pull_result.total_num_shards
+    start = int(interval[0] - (pull_result.start_axis_idx * shard_length))
     end = int(start + (interval[1] - interval[0]))
     return np.take(merged, range(start, end), axis=shard_axis)
 
@@ -449,7 +450,9 @@ if __name__ == '__main__':
     assert (x.pull(id_a, (0, 10)) == update).all()
     print 'Update 1st shard success.'
 
+    import pdb
     x.push(id_a, (63, 73), update)
+    pdb.set_trace()
     assert (x.pull(id_a, (63, 73)) == update).all()
     print 'Update across multiple shards success.'
 
