@@ -90,8 +90,8 @@ void add_object_to_lru_cache(eviction_state *eviction_state,
            sizeof(object_id), hash_table_entry);
 }
 
-void remove_object_from_lru_cache(eviction_state *eviction_state,
-                                  object_id object_id) {
+void remove_object_from_lru_cache_if_present(eviction_state *eviction_state,
+                                             object_id object_id) {
   /* Check that the object ID is in the hash table. */
   released_object_entry *hash_table_entry;
   HASH_FIND(handle, eviction_state->released_object_table, &object_id,
@@ -104,7 +104,8 @@ void remove_object_from_lru_cache(eviction_state *eviction_state,
     /* Free the entry from the doubly-linked list. */
     free(hash_table_entry->released_object);
     /* Remove the object ID from the hash table. */
-    HASH_DELETE(handle, eviction_state->released_object_table, hash_table_entry);
+    HASH_DELETE(handle, eviction_state->released_object_table,
+                hash_table_entry);
     /* Free the entry from the hash table. */
     free(hash_table_entry);
   }
@@ -131,7 +132,7 @@ int64_t evict_objects(eviction_state *eviction_state,
               entry);
     num_bytes_evicted += (entry->info.data_size + entry->info.metadata_size);
     /* Update the LRU cache. */
-    remove_object_from_lru_cache(eviction_state, obj_id);
+    remove_object_from_lru_cache_if_present(eviction_state, obj_id);
     num_objects_evicted += 1;
   }
 
@@ -181,8 +182,7 @@ void handle_add_client(eviction_state *eviction_state,
                        int64_t *num_objects_to_evict,
                        object_id **objects_to_evict) {
   /* If the object is in the LRU cache, remove it. */
-  // TODO(rkn): May need to modify this to only remove the object if it is present.
-  remove_object_from_lru_cache(eviction_state, obj_id);
+  remove_object_from_lru_cache_if_present(eviction_state, obj_id);
   *num_objects_to_evict = 0;
   *objects_to_evict = NULL;
 }

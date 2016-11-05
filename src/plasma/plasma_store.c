@@ -156,10 +156,9 @@ void create_object(client *client_context,
    * a new object. */
   int64_t num_objects_to_evict;
   object_id *objects_to_evict;
-  handle_before_create(plasma_state->eviction_state,
-                       plasma_state->plasma_store_info,
-                       data_size + metadata_size, &num_objects_to_evict,
-                       &objects_to_evict);
+  handle_before_create(
+      plasma_state->eviction_state, plasma_state->plasma_store_info,
+      data_size + metadata_size, &num_objects_to_evict, &objects_to_evict);
   remove_objects(plasma_state, num_objects_to_evict, objects_to_evict);
   /* Allocate space for the new object */
   uint8_t *pointer = dlmalloc(data_size + metadata_size);
@@ -284,7 +283,8 @@ void seal_object(client *client_context, object_id object_id) {
   object_table_entry *entry;
   HASH_FIND(handle, plasma_state->plasma_store_info->objects, &object_id,
             sizeof(object_id), entry);
-  CHECK(entry != NULL && entry->state == OPEN);
+  CHECK(entry != NULL);
+  CHECK(entry->state == OPEN);
   /* Set the state of object to SEALED. */
   entry->state = SEALED;
   /* Inform all subscribers that a new object has been sealed. */
@@ -327,8 +327,11 @@ void seal_object(client *client_context, object_id object_id) {
 void delete_object(plasma_store_state *plasma_state, object_id object_id) {
   LOG_DEBUG("deleting object");
   object_table_entry *entry;
-  HASH_FIND(handle, plasma_state->plasma_store_info->objects,
-            &object_id, sizeof(object_id), entry);
+  HASH_FIND(handle, plasma_state->plasma_store_info->objects, &object_id,
+            sizeof(object_id), entry);
+
+  printf("DELETING OBJECT OF SIZE %lld\n", entry->info.data_size + entry->info.metadata_size);
+
   /* TODO(rkn): This should probably not fail, but should instead throw an
    * error. Maybe we should also support deleting objects that have been created
    * but not sealed. */
