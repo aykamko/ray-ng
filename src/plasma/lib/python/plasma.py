@@ -245,10 +245,16 @@ class PlasmaClient(object):
         break
     return message_data
 
-  def init_kvstore(self, kv_store_id, np_data, shard_axis=0, shard_size=10):
+  def init_kvstore(self, kv_store_id, np_data, shard_order='C', shard_size=10):
     assert type(np_data) is np.ndarray
-    assert shard_axis <= len(np_data.shape)
+    assert shard_order in ['C', 'F']
 
+    if shard_order == 'C' and not np_data.flags.c_contiguous:
+      np_data = np.ascontiguousarray(np_data)
+    elif shard_order == 'F' and not np_data.flags.f_contiguous:
+      np_data = np.asfortranarray(np_data)
+
+    shard_axis = 0 if shard_order == 'C' else -1
     axis_len = np_data.shape[shard_axis]
     num_shards = axis_len / shard_size
 
@@ -267,7 +273,7 @@ class PlasmaClient(object):
       void_handle_arr,
       shard_sizes_ptr,
       len(partitions),
-      ctypes.c_uint64(shard_axis),
+      ctypes.c_char(shard_order),
       shape,
       np_data.ndim
     )
@@ -289,7 +295,8 @@ class PlasmaClient(object):
 
     num_shards = pull_result.result_num_shards
     ndim = pull_result.ndim
-    shard_axis = pull_result.shard_axis
+    shard_order = str(pull_result.shard_order)
+    shard_axis = 0 if shard_order == 'C' else -1
     void_ptr_size = ctypes.sizeof(ctypes.c_void_p)
 
     shard_ptr_buf_size = ctypes.c_int64(num_shards * void_ptr_size)
@@ -316,11 +323,10 @@ class PlasmaClient(object):
         shard_data_buf,
         dtype=np.float64,
         count=shard_sizes[i],
-      ).reshape(shard_shape))
+      ).reshape(shard_shape, order=shard_order))
 
     merged = np.concatenate(shards, axis=shard_axis)
-    shard_length = shape[shard_axis] / pull_result.total_num_shards
-    start = int(interval[0] - (pull_result.start_axis_idx * shard_length))
+    start = int(interval[0] - pull_result.start_axis_idx)
     end = int(start + (interval[1] - interval[0]))
     return np.take(merged, range(start, end), axis=shard_axis)
 
