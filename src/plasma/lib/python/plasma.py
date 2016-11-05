@@ -457,9 +457,7 @@ if __name__ == '__main__':
     assert (x.pull(id_a, (0, 10)) == update).all()
     print 'Update 1st shard success.'
 
-    import pdb
     x.push(id_a, (63, 73), update)
-    pdb.set_trace()
     assert (x.pull(id_a, (63, 73)) == update).all()
     print 'Update across multiple shards success.'
 
