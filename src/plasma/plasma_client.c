@@ -555,7 +555,7 @@ void plasma_pull(plasma_connection *conn,
   plasma_get(conn, kv_object_id, &kv_data_size, &kv_data, NULL, NULL);
 
   uint8_t *kv_data_cursor = kv_data;
-  uint64_t total_num_shards = *(uint64_t *)kv_data_cursor;
+  result->total_num_shards = *(uint64_t *)kv_data_cursor;
   kv_data_cursor += sizeof(uint64_t);
 
   result->ndim = *(uint64_t *)kv_data_cursor;
@@ -570,10 +570,10 @@ void plasma_pull(plasma_connection *conn,
   kv_data_cursor += (result->ndim) * sizeof(uint64_t);
 
   /* object_id *UNUSED_shard_axis_ids = (object_id *) kv_data_cursor; */
-  kv_data_cursor += total_num_shards * sizeof(object_id);
+  kv_data_cursor += result->total_num_shards * sizeof(object_id);
 
   uint64_t *shard_sizes = (uint64_t *) kv_data_cursor;
-  kv_data_cursor += total_num_shards * sizeof(uint64_t);
+  kv_data_cursor += result->total_num_shards * sizeof(uint64_t);
 
   void **shards_handle = (void **) kv_data_cursor;
 
@@ -596,7 +596,7 @@ void plasma_pull(plasma_connection *conn,
   }
   end_axis_i = axis_i;
 
-  result->num_shards = end_axis_i - start_axis_i;
+  result->result_num_shards = end_axis_i - start_axis_i;
   result->shards_handle = &shards_handle[start_axis_i];
   result->shard_sizes = &shard_sizes[start_axis_i];
   result->start_axis_idx = start_axis_i;

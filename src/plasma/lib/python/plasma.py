@@ -69,7 +69,8 @@ class PlasmaBuffer(object):
 class PlasmaPullResult(ctypes.Structure):
   _fields_ = [
     ("shards_handle", ctypes.POINTER(ctypes.c_void_p)),
-    ("num_shards", ctypes.c_uint64),
+    ("total_num_shards", ctypes.c_uint64),
+    ("result_num_shards", ctypes.c_uint64),
     ("shape", ctypes.POINTER(ctypes.c_uint64)),
     ("ndim", ctypes.c_uint64),
     ("shard_sizes", ctypes.POINTER(ctypes.c_uint64)),
@@ -332,6 +333,7 @@ class PlasmaClient(object):
       void_handle_arr,
       shard_sizes_ptr,
       len(partitions),
+      shard_size,
       ctypes.c_char(shard_order),
       shape,
       np_data.ndim
@@ -385,8 +387,10 @@ class PlasmaClient(object):
       ).reshape(shard_shape, order=shard_order))
 
     merged = np.concatenate(shards, axis=shard_axis)
-    start = int(interval[0] - pull_result.start_axis_idx)
+    shard_length = shape[shard_axis] / pull_result.total_num_shards
+    start = int(interval[0] - (pull_result.start_axis_idx * shard_length))
     end = int(start + (interval[1] - interval[0]))
+    import pdb; pdb.set_trace()
 
     return np.take(merged, range(start, end), axis=shard_axis)
 
@@ -446,14 +450,14 @@ if __name__ == '__main__':
 
     id_c = "c" * 20
     x.init_kvstore(id_c, foo)
-    yc = x.pull(id_c, (5, 15))
-    assert (yc == foo[5:15]).all()
+    assert (x.pull(id_c, (5, 15)) == foo[5:15]).all()
+    assert (x.pull(id_c, (63, 73)) == foo[63:73]).all()
     print 'C-style slicing works!'
 
     id_f = "f" * 20
     x.init_kvstore(id_f, foo, shard_order='F')
-    yf = x.pull(id_f, (5, 15))
-    assert (yf == foo[..., 5:15]).all()
+    assert (x.pull(id_f, (5, 15)) == foo[:, 5:15]).all()
+    assert (x.pull(id_f, (63, 73)) == foo[:, 63:73]).all()
     print 'F-style slicing works!'
 
   slice_test()
