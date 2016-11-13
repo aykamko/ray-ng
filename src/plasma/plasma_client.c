@@ -32,10 +32,12 @@
 #define NUM_CONNECT_ATTEMPTS 50
 #define CONNECT_TIMEOUT 100
 
-#ifndef _WIN32
-/* This function is actually not declared in standard POSIX, so declare it. */
-extern int usleep(useconds_t usec);
-#endif
+#define sample_array(addr, msg, size, type) \
+  printf("%s: ", msg); fflush(stdout); \
+  for (int i = 0; i < size; i++) { \
+    printf(" %f ", ((type *)addr)[i]); fflush(stdout); \
+  } \
+  printf("\n"); fflush(stdout);
 
 typedef struct {
   /** Key that uniquely identifies the  memory mapped file. In practice, we
@@ -1016,22 +1018,10 @@ void plasma_push(plasma_connection *conn,
   if (copy_size > size) {
     copy_size = size;
   }
-  void *addr = result.shards_handle[start_axis_i] + (start * 8);
+  void *addr = result.shards_handle[0] + (start * 8);
 
-  printf("Start: %d\n", start);
-  printf("range_start: %d\n", range_start);
-  printf("axis_size: %d\n", axis_size);
-
-  printf("Start size %d\n", size);
-
-  printf("copy size %d\n", copy_size);
-
-  for (uint64_t i = start_axis_i; i < start_axis_i + result.result_num_shards;) {
-    printf("shard_i %d\n", i);
-    printf("orign data[0]: %f\n", *(double *) addr);
-    printf("copy data[0]: %f\n", *(double *) data);
+  for (uint64_t i = 0; i < result.result_num_shards;) {
     memcpy(addr, data, copy_size * 8);
-    printf("new data[0]: %f\n", *(double *) addr);
 
     size -= copy_size;
     data += copy_size * 8;
@@ -1040,7 +1030,5 @@ void plasma_push(plasma_connection *conn,
     if (copy_size > size) {
       copy_size = size;
     }
-    printf("copy size %d\n", copy_size);
   }
-  printf("Remaining size %d\n", size);
 }
