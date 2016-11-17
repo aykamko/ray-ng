@@ -927,7 +927,7 @@ void plasma_init_kvstore(plasma_connection *conn,
   kv_data += 1;
 
   memcpy(kv_data, shape, matrix_ndims);
-  kv_data += matrix_ndims;;
+  kv_data += matrix_ndims;
 
   memcpy(kv_data, shard_ids, shard_id_bytes); // write shard object_ids
   kv_data += shard_id_bytes;

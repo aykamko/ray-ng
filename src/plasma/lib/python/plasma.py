@@ -261,7 +261,7 @@ class PlasmaClient(object):
     axis_len = np_data.shape[shard_axis]
     num_shards = axis_len / shard_size
 
-    partitions = np.split(np_data, num_shards, axis=shard_axis)
+    partitions = np.array_split(np_data, num_shards, axis=shard_axis)
     partition_lengths = np.array([p.size for p in partitions], dtype=np.uint64)
     void_p_partitions = np.array([p.ctypes.data_as(ctypes.c_void_p).value for p in partitions])
     shape = np.array(np_data.shape).ctypes.data_as(ctypes.c_void_p) # horrible HACK
@@ -315,6 +315,7 @@ class PlasmaClient(object):
 
     shard_shape = np.array(shape) # make a copy
     shards = []
+
     for i in range(num_shards):
       shard_data_buf = self.buffer_from_read_write_memory(
         ctypes.cast(int(shards_handle[i]), ctypes.POINTER(ctypes.c_double)), # TODO: generic datatype
