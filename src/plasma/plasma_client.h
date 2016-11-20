@@ -552,7 +552,8 @@ void plasma_init_kvstore(plasma_connection *conn,
 
 // TODO: document
 typedef struct {
-  void **shards_handle;
+  // void **shards_handle;
+  object_id *shard_ids;
   uint64_t total_num_shards;
   uint64_t result_num_shards;
   uint64_t *shape;
