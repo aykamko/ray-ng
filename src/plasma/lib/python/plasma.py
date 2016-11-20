@@ -489,10 +489,12 @@ if __name__ == '__main__':
     assert (x.pull(id_a, (63, 73)) == update).all()
     print 'Update across multiple shards success.'
 
-    # x.push(id_a, (0, 1000), foo)
-    # assert (x.pull(id_a, (0, 1000)) == foo).all()
-    # print 'Reset back to foo success.'
+    x.push(id_a, (0, 1000), foo)
+    assert (x.pull(id_a, (0, 1000)) == foo).all()
+    print 'Reset back to foo success.'
 
   slice_test()
   push_test()
+
+  print
   print '>>> Tests passed!'

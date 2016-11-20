@@ -39,6 +39,9 @@
   } \
   printf("\n"); fflush(stdout);
 
+#define min(x, y) (((x) < (y)) ? (x) : (y))
+#define max(x, y) (((x) > (y)) ? (x) : (y))
+
 typedef struct {
   /** Key that uniquely identifies the  memory mapped file. In practice, we
    *  take the numerical value of the file descriptor in the object store. */
@@ -1091,9 +1094,7 @@ void plasma_push(plasma_connection *conn,
   // TODO Error checking, make sure we can actually do this
   uint64_t start = (range_start * axis_size) % result.shard_sizes[start_axis_i];
   uint64_t copy_size = result.shard_sizes[start_axis_i] - start;
-  if (copy_size > size) {
-    copy_size = size;
-  }
+  copy_size = min(copy_size, size);
 
   int64_t shard_size;
   void *shard_data;
@@ -1102,18 +1103,20 @@ void plasma_push(plasma_connection *conn,
   plasma_get(conn, result.shard_ids[0], &shard_size, (uint8_t *)&shard_data, NULL, NULL);
   addr = shard_data + (start * 8);
 
-  for (uint64_t i = 0; i < result.result_num_shards;) {
+  for (uint64_t i = 1; i < result.result_num_shards; i++) {
     memcpy(addr, data, copy_size * 8);
 
     size -= copy_size;
     data += copy_size * 8;
 
-    plasma_get(conn, result.shard_ids[++i], &shard_size, (uint8_t *)&shard_data, NULL, NULL);
+    plasma_get(conn, result.shard_ids[i], &shard_size, (uint8_t *)&shard_data, NULL, NULL);
     addr = shard_data;
 
-    copy_size = result.shard_sizes[i];
-    if (copy_size > size) {
-      copy_size = size;
-    }
+    copy_size = min(result.shard_sizes[i], size);
   }
+  memcpy(addr, data, copy_size * 8);
+
+  size -= copy_size;
+  data += copy_size * 8;
+  printf("done\n");
 }
