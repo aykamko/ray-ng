@@ -561,6 +561,7 @@ typedef struct {
   uint64_t *shard_sizes;
   uint64_t start_axis_idx;
   char shard_order;
+  uint64_t slice_start;
 } plasma_pull_result;
 
 // TODO: document

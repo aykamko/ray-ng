@@ -31,11 +31,14 @@ def worker(shard_idx):
     return 1
 
 from multiprocessing.pool import ThreadPool
+from multiprocessing import Pool
 
 def run_worker(worker_idx):
-    for i in range(3):
+    for i in range(1):
         update = ray.get(worker.remote(i))
         client.push(W_id, (i,i+1), client.pull(W_id, (i,i+1)) + update)
 
 p = ThreadPool(NUM_WORKERS)
+# p = Pool(NUM_WORKERS)
 p.map(run_worker, range(NUM_WORKERS))
+# p.join()

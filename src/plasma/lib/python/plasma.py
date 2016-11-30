@@ -68,6 +68,7 @@ class PlasmaPullResult(ctypes.Structure):
     ("shard_sizes", ctypes.POINTER(ctypes.c_uint64)),
     ("start_axis_idx", ctypes.c_uint64),
     ("shard_order", ctypes.c_char),
+    ("slice_start", ctypes.c_uint64),
   ]
 
 
@@ -260,16 +261,29 @@ class PlasmaClient(object):
     assert type(np_data) is np.ndarray
     assert shard_order in ['C', 'F']
 
-    if shard_order == 'C' and not np_data.flags.c_contiguous:
-      np_data = np.ascontiguousarray(np_data)
-    elif shard_order == 'F' and not np_data.flags.f_contiguous:
-      np_data = np.asfortranarray(np_data)
-
     shard_axis = 0 if shard_order == 'C' else -1
     axis_len = np_data.shape[shard_axis]
     num_shards = axis_len / shard_size
+    left_over = axis_len % shard_size
 
-    partitions = np.array_split(np_data, num_shards, axis=shard_axis)
+    np_spill = None
+    if shard_order == 'C':
+      if not np_data.flags.c_contiguous:
+        np_data = np.ascontiguousarray(np_data)
+      if left_over:
+        np_data, np_spill = np_data[:-left_over], np_data[-left_over:]
+    elif shard_order == 'F':
+      if not np_data.flags.f_contiguous:
+        np_data = np.asfortranarray(np_data)
+      if left_over:
+        np_data, np_spill = np_data[..., :-left_over], np_data[..., -left_over:]
+    else:
+      pass # TODO: error
+
+    partitions = np.split(np_data, num_shards, axis=shard_axis)
+    if np_spill is not None:
+      partitions.append(np_spill)
+
     partition_lengths = np.array([p.size for p in partitions], dtype=np.uint64)
     void_p_partitions = np.array([p.ctypes.data_as(ctypes.c_void_p).value for p in partitions])
     shape = np.array(np_data.shape).ctypes.data_as(ctypes.c_void_p) # horrible HACK
@@ -312,9 +326,6 @@ class PlasmaClient(object):
     shard_ptr_buf_size = ctypes.c_int64(num_shards * void_ptr_size)
     shape_buf_size = ctypes.c_int64(ndim * 8) # will always use uint64_t for sizes
 
-    # shards_handle_buf = self.buffer_from_memory(pull_result.shards_handle, shard_ptr_buf_size)
-    # shards_handle = np.frombuffer(shards_handle_buf, dtype=np.uint64, count=num_shards)
-
     shard_bytes_sizes_buf = self.buffer_from_memory(pull_result.shard_sizes, shard_ptr_buf_size)
     shard_sizes = np.frombuffer(shard_bytes_sizes_buf, dtype=np.uint64, count=num_shards)
 
@@ -325,33 +336,24 @@ class PlasmaClient(object):
     shards = []
 
     shard_id_addr = pull_result.shard_ids
-    # print(shard_id_addr)
+    axis_units = np.product(shape) / shape[shard_axis]
     for i in range(num_shards):
-      # shard_id = str(np.ctypeslib.as_array((ctypes.c_char * 20).from_address(shard_id_addr)))
-      # plasma_buff = libplasma.get(self.conn, shard_id)[0]
-      # shards.append(np.frombuffer(
-      #   shard_data_buf,
-      #   dtype=np.float64,
-      #   count=shard_sizes[i],
-      # ).reshape(shard_shape, order=shard_order))
-
       shard_id = np.frombuffer(self.buffer_from_read_write_memory(
         ctypes.cast(shard_id_addr, ctypes.POINTER(ctypes.c_char)),
         ctypes.c_int64(20),
       ), dtype=np.uint8, count=20).tobytes()
-      shard_shape[shard_axis] = int(shard_sizes[i] / shape[shard_axis])
+      shard_shape[shard_axis] = int(shard_sizes[i] / axis_units)
       plasma_buff = libplasma.get(self.conn, shard_id)[0]
       shards.append(np.frombuffer(
         plasma_buff,
         dtype=np.float64,
         count=shard_sizes[i],
       ).reshape(shard_shape, order=shard_order))
-      shard_id_addr += 20
+      shard_id_addr += 20 # FIXME: should use length of object_id explicitly
 
     merged = np.concatenate(shards, axis=shard_axis)
-    shard_length = shape[shard_axis] / pull_result.total_num_shards
-    start = int(interval[0] - (pull_result.start_axis_idx * shard_length))
-    end = int(start + (interval[1] - interval[0]))
+    start = int(pull_result.slice_start)
+    end = start + (interval[1] - interval[0])
     return np.take(merged, range(start, end), axis=shard_axis)
 
   def push(self, kv_store_id, interval, np_data, shard_order='C', version=0):
