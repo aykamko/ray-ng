@@ -32,10 +32,10 @@
 #define NUM_CONNECT_ATTEMPTS 50
 #define CONNECT_TIMEOUT 100
 
-#define sample_array(addr, msg, size, type) \
+#define sample_array(addr, msg, fmt, size, type) \
   printf("%s: ", msg); fflush(stdout); \
   for (int i = 0; i < size; i++) { \
-    printf(" %f ", ((type *)addr)[i]); fflush(stdout); \
+    printf(fmt, ((type *)addr)[i]); fflush(stdout); \
   } \
   printf("\n"); fflush(stdout);
 
@@ -911,12 +911,11 @@ void plasma_init_kvstore(plasma_connection *conn,
   /* int64_t shard_datum_ptr_bytes = num_shards * sizeof(void *); */
   int64_t matrix_ndims = ndims * sizeof(uint64_t);
 
-  int64_t kv_data_size = (2 * sizeof(uint64_t))
-    + sizeof(char)
+  int64_t kv_data_size = (2 * sizeof(uint64_t)) // num_shards, n_dims
+    + sizeof(char) // shard_order
+    + matrix_ndims
     + shard_id_bytes
-    + shard_sizes_bytes
-    /* + shard_datum_ptr_bytes */
-    + matrix_ndims;
+    + shard_sizes_bytes;
 
   uint8_t *kv_data;
   plasma_create(conn, kv_object_id, kv_data_size, NULL, 0, &kv_data);
@@ -955,6 +954,7 @@ void plasma_pull(plasma_connection *conn,
   plasma_get(conn, kv_object_id, &kv_data_size, &kv_data, NULL, NULL);
 
   uint8_t *kv_data_cursor = kv_data;
+
   uint64_t total_num_shards = *(uint64_t *)kv_data_cursor;
   result->total_num_shards = total_num_shards;
   kv_data_cursor += sizeof(uint64_t);
@@ -963,49 +963,45 @@ void plasma_pull(plasma_connection *conn,
   kv_data_cursor += sizeof(uint64_t);
 
   result->shard_order = *(char *)kv_data_cursor;
-  int shard_axis = result->shard_order == 'C' ? 0 : result->ndim-1;
-  kv_data_cursor += sizeof(char);
+  int shard_axis = result->shard_order == 'C' ? 0 : result->ndim - 1;
+  kv_data_cursor += 1;
 
   result->shape = (uint64_t *)kv_data_cursor;
-  uint64_t axis_size = result->shape[shard_axis];
-  kv_data_cursor += (result->ndim) * sizeof(uint64_t);
+  uint64_t axis_units = 1;
+  for (int i = 0; i < result->ndim; i++) axis_units *= result->shape[i];
+  axis_units /= result->shape[shard_axis];
+  kv_data_cursor += result->ndim * sizeof(uint64_t);
 
   object_id *shard_ids = (object_id *) kv_data_cursor;
   kv_data_cursor += total_num_shards * sizeof(object_id);
 
   uint64_t *shard_sizes = (uint64_t *) kv_data_cursor;
-  /* kv_data_cursor += total_num_shards * sizeof(uint64_t); */
-
-  /* void **shards_handle = (void **) kv_data_cursor; */
 
   // TODO: pray we won't go out of bounds
-  uint64_t cum_size = 0;
-  uint64_t start_i;
-  int start_axis_i, end_axis_i;
+  uint64_t cum_axis_size = 0;
+  uint64_t start_axis_i, end_axis_i;
+  uint64_t normalized_slice_start, normalized_slice_end;
   int axis_i = 0;
 
-  while (cum_size <= range_start) {
-    cum_size += shard_sizes[axis_i] / axis_size;
-    axis_i++;
+  while (cum_axis_size <= range_start) {
+    cum_axis_size += shard_sizes[axis_i++] / axis_units;
   }
-  start_axis_i = axis_i-1;
-  start_i = cum_size - shard_sizes[start_axis_i];
+  start_axis_i = axis_i-1;  // backtrack one step
+  result->slice_start = range_start - (cum_axis_size - shard_sizes[start_axis_i] / axis_units);
 
-  while (range_end > cum_size) {
-    cum_size += shard_sizes[axis_i] / axis_size;
-    axis_i++;
+  while (range_end > cum_axis_size) {
+    cum_axis_size += shard_sizes[axis_i++] / axis_units;
   }
   end_axis_i = axis_i;
 
   result->result_num_shards = end_axis_i - start_axis_i;
   result->shard_ids = &shard_ids[start_axis_i];
 
-  /* int is_fetched[result->result_num_shards]; */
-  /* plasma_fetch(conn, result->result_num_shards, result->shard_ids, is_fetched); */
-  /* result->shards_handle = &shards_handle[start_axis_i]; */
-
   result->shard_sizes = &shard_sizes[start_axis_i];
   result->start_axis_idx = start_axis_i;
+
+  /* int is_fetched[result->result_num_shards]; */
+  /* plasma_fetch(conn, result->result_num_shards, result->shard_ids, is_fetched); */
 }
 
 void plasma_push(plasma_connection *conn,
@@ -1019,10 +1015,13 @@ void plasma_push(plasma_connection *conn,
   plasma_pull(conn, kv_object_id, range_start, range_end, &result);
   uint64_t start_axis_i = result.start_axis_idx;
   int shard_axis = result.shard_order == 'C' ? 0 : result.ndim-1;
-  uint64_t axis_size = result.shape[shard_axis];
+
+  uint64_t axis_units = 1;
+  for (int i = 0; i < result.ndim; i++) axis_units *= result.shape[i];
+  axis_units /= result.shape[shard_axis];
 
   // TODO Error checking, make sure we can actually do this
-  uint64_t start = (range_start * axis_size) % result.shard_sizes[start_axis_i];
+  uint64_t start = (range_start * axis_units) % result.shard_sizes[start_axis_i];
   uint64_t copy_size = result.shard_sizes[start_axis_i] - start;
   copy_size = min(copy_size, size);
 
