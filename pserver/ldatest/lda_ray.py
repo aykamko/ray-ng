@@ -30,7 +30,7 @@ from multiprocessing.pool import ThreadPool
 EPS = online_lda.EPS
 
 NUM_WORKERS = 8
-_, addr_info = ray.init(start_ray_local=True, num_workers=NUM_WORKERS)
+addr_info = ray.init(start_ray_local=True, num_workers=NUM_WORKERS)
 
 # SOURCE: https://github.com/scikit-learn/scikit-learn/blob/master/sklearn/decomposition/online_lda.py
 def ray_update_doc_distribution(X, exp_topic_word_distr, doc_topic_prior,
@@ -211,7 +211,8 @@ W_SHARDS = 100
 W_shard_size = n_features / W_SHARDS
 client.init_kvstore(W_id, W, shard_order='F', shard_size=W_shard_size)
 
-NUM_ITER = 1000
+# NUM_ITER = 1000
+NUM_ITER = 10
 for i in xrange(NUM_ITER):
   t_start = time.time()
   remote_em_step(sharded_model, X_id, W_id, X_shard_size, n_features, W.shape)
