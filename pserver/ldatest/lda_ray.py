@@ -25,7 +25,12 @@ from scipy.sparse import csr_matrix
 from sklearn.decomposition._online_lda import (mean_change, _dirichlet_expectation_1d,
                           _dirichlet_expectation_2d)
 
+from multiprocessing.pool import ThreadPool
+
 EPS = online_lda.EPS
+
+NUM_WORKERS = 8
+_, addr_info = ray.init(start_ray_local=True, num_workers=NUM_WORKERS)
 
 # SOURCE: https://github.com/scikit-learn/scikit-learn/blob/master/sklearn/decomposition/online_lda.py
 def ray_update_doc_distribution(X, exp_topic_word_distr, doc_topic_prior,
@@ -121,14 +126,73 @@ def ray_update_doc_distribution(X, exp_topic_word_distr, doc_topic_prior,
 
     return (doc_topic_distr, suff_stats)
 
+def worker_client_initializer():
+    return PlasmaClient(addr_info['object_store_name'])
+ray.reusables.local_client = ray.Reusable(worker_client_initializer, lambda x: x)
+
+def relevant_shard_ranges(X):
+  # NOTE: assumes at least one element
+  nzc = sorted(np.unique(np.nonzero(X)[1]))
+  feat_ranges = []
+  range_start = nzc[0]
+  cur_range = [range_start, range_start+1]
+  for nzidx in nzc[1:]:
+    shard_idx = nzidx
+    if shard_idx < cur_range[1]:
+      continue
+    elif shard_idx == cur_range[1]:
+      cur_range[1] += 1
+    else:
+      feat_ranges.append(tuple(cur_range))
+      cur_range = [shard_idx, shard_idx+1]
+  feat_ranges.append(tuple(cur_range))
+  return feat_ranges
+
+@ray.remote
+def remote_e_step(X_id, W_id, X_shard_idx, X_shard_size, n_feats, W_shape,
+                  doc_topic_prior, max_doc_update_iter, mean_change_tol):
+  local_client = ray.reusables.local_client
+  X_range = (X_shard_idx * X_shard_size, min((X_shard_idx+1)*X_shard_size, n_feats))
+  X_local = local_client.pull(X_id, X_range)
+  relevant_shards = relevant_shard_ranges(X_local)
+
+  relevant_exp_dirichlet_component = np.zeros(W_shape)
+  # TODO: collapse this to one lib call
+  for shard_range in relevant_shards:
+    relevant_exp_dirichlet_component[:, shard_range[0]:shard_range[1]] = \
+      local_client.pull(W_id, shard_range)
+
+  doc_topics, sstats = ray_update_doc_distribution(X_local,
+                              relevant_exp_dirichlet_component,
+                              doc_topic_prior,
+                              max_doc_update_iter,
+                              mean_change_tol,
+                              cal_sstats=True,
+                              random_state=None) # TODO
+
+  # return [doc_topics, sstats]  TODO
+  return sstats
+
+def remote_em_step(model, X_id, W_id, X_shard_size, n_feats, W_shape):
+  suff_stats = np.zeros_like(model.components_)
+  e_step_handles = [
+    remote_e_step.remote(X_id, W_id, i, X_shard_size, n_feats, W_shape,
+                         model.doc_topic_prior_, model.max_doc_update_iter, model.mean_change_tol)
+    for i in range(NUM_WORKERS) ]
+  e_results = [ray.get(h) for h in e_step_handles]
+  for sstats in e_results:
+    suff_stats += sstats
+  suff_stats *= model.exp_dirichlet_component_
+
+  model.components_ = model.topic_word_prior_ + suff_stats
+  model.exp_dirichlet_component_ = np.exp(_dirichlet_expectation_2d(model.components_))
+
+
 X = lda.datasets.load_reuters().astype(np.float64)
 n_samples, n_features = X.shape
 vocab = lda.datasets.load_reuters_vocab()
 titles = lda.datasets.load_reuters_titles()
 
-NUM_WORKERS = 8
-
-_, addr_info = ray.init(start_ray_local=True, num_workers=NUM_WORKERS)
 client = PlasmaClient(addr_info['object_store_name'])
 
 X_id = "x"*20
@@ -147,81 +211,10 @@ W_SHARDS = 100
 W_shard_size = n_features / W_SHARDS
 client.init_kvstore(W_id, W, shard_order='F', shard_size=W_shard_size)
 
-def worker_client_initializer():
-    return PlasmaClient(addr_info['object_store_name'])
-ray.reusables.local_client = ray.Reusable(worker_client_initializer, lambda x: x)
-
-def relevant_shard_ranges(X):
-  # NOTE: assumes at least one element
-  nzc = sorted(np.unique(np.nonzero(X)[1]))
-  feat_ranges = []
-  range_start = nzc[0] / W_shard_size
-  cur_range = [range_start, range_start+1]
-  for nzidx in nzc[1:]:
-    shard_idx = nzidx / W_shard_size
-    if shard_idx < cur_range[1]:
-      continue
-    elif shard_idx == cur_range[1]:
-      cur_range[1] += 1
-    else:
-      feat_ranges.append(tuple(cur_range))
-      cur_range = [shard_idx, shard_idx+1]
-  feat_ranges.append(tuple(cur_range))
-  return feat_ranges
-
-def relevant_shard_ranges_fixed(X):
-  # NOTE: assumes at least one element
-  nzc = sorted(np.unique(np.nonzero(X)[1]))
-  feat_ranges = []
-  range_start = nzc[0] / W_shard_size
-  cur_range = [range_start, range_start+1]
-  for nzidx in nzc[1:]:
-    shard_idx = nzidx
-    if shard_idx < cur_range[1]:
-      continue
-    elif shard_idx == cur_range[1]:
-      cur_range[1] += 1
-    else:
-      feat_ranges.append(tuple(cur_range))
-      cur_range = [shard_idx, shard_idx+1]
-  feat_ranges.append(tuple(cur_range))
-  return feat_ranges
-
-@ray.remote
-def remote_e_step(X_shard_idx):
-  local_client = ray.reusables.local_client
-  X_range = (X_shard_idx * X_shard_size, min((X_shard_idx+1)*X_shard_size, X.shape[-1]))
-  X_local = local_client.pull(X_id, X_range)
-  relevant_shards = relevant_shard_ranges_fixed(X_local)
-
-  relevant_exp_dirichlet_component = np.zeros_like(W)
-  # TODO: collapse this to one lib call
-  for shard_range in relevant_shards:
-    relevant_exp_dirichlet_component[:, shard_range[0]:shard_range[1]] = \
-      local_client.pull(W_id, shard_range)
-
-  doc_topics, sstats = ray_update_doc_distribution(X_local,
-                              relevant_exp_dirichlet_component,
-                              sharded_model.doc_topic_prior_, # TODO
-                              sharded_model.max_doc_update_iter, # TODO
-                              sharded_model.mean_change_tol, # TODO
-                              cal_sstats=True,
-                              random_state=None) # TODO
-
-  # return [doc_topics, sstats]  TODO
-  return sstats
-
-
-def run_worker(X_shard_idx):
-  sstats = ray.get(remote_e_step.remote(X_shard_idx))
-  return sstats
-
-from multiprocessing.pool import ThreadPool
-
-t_start = time.time()
-p = ThreadPool(NUM_WORKERS)
-result = p.map(run_worker, range(NUM_WORKERS))
-t_dur = time.time() - t_start
-print("Duration: %f s", t_dur)
+NUM_ITER = 1000
+for i in xrange(NUM_ITER):
+  t_start = time.time()
+  remote_em_step(sharded_model, X_id, W_id, X_shard_size, n_features, W.shape)
+  print("{}: duration {} s".format(i, time.time() - t_start))
 
 import ipdb; ipdb.set_trace()
