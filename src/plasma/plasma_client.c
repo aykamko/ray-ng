@@ -954,6 +954,7 @@ void object_requests_print(int num_object_requests,
     printf(" | %d | %d], ", object_requests[i].type, object_requests[i].status);
   }
   printf("\n");
+}
 
 // TODO: need to lookup if kv_object_id already exists on some other machine
 void plasma_init_kvstore(plasma_connection *conn,

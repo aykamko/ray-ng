@@ -538,7 +538,6 @@ void object_id_print(object_id object_id);
 void object_requests_print(int num_object_requests,
                            object_request object_requests[]);
 
-#endif /* PLASMA_CLIENT_H */
 
 // TODO: document
 void plasma_init_kvstore(plasma_connection *conn,
@@ -579,4 +578,4 @@ void plasma_push(plasma_connection *conn,
                  uint64_t size,
                  void* data);
 
-#endif
+#endif /* PLASMA_CLIENT_H */
