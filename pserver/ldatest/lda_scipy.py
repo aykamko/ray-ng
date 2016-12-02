@@ -11,8 +11,11 @@ titles = lda.datasets.load_reuters_titles()
 
 ShardedLDAModel = sklearn.decomposition.LatentDirichletAllocation
 
-sharded_model = ShardedLDAModel(n_topics=20, n_jobs=8, max_iter=50, learning_method='batch')
+sharded_model = ShardedLDAModel(n_topics=20, n_jobs=8, max_iter=1000,
+                                learning_method='batch', evaluate_every=10,
+                                verbose=1)
 
 t_start = time.time()
 sharded_model.fit(X)
 print("scipy: duration {} s".format(time.time() - t_start))
+print("final perplexity: {}".format(sharded_model.perplexity(X)))

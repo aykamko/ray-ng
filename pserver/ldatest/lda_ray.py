@@ -211,11 +211,14 @@ W_SHARDS = 100
 W_shard_size = n_features / W_SHARDS
 client.init_kvstore(W_id, W, shard_order='F', shard_size=W_shard_size)
 
-NUM_ITER = 50
+NUM_ITER = 1000
 # NUM_ITER = 10
 global_t_start = time.time()
 for i in xrange(NUM_ITER):
   t_start = time.time()
   remote_em_step(sharded_model, X_id, W_id, X_shard_size, n_features, W.shape)
+  client.push(W_id, (0, W.shape[-1]), sharded_model.exp_dirichlet_component_, shard_order='F')
   print("{}: duration {} s".format(i, time.time() - t_start))
+  if i % 10 == 0:
+    print("perplexity: {}".format(sharded_model.perplexity(X)))
 print("ray: total duration {} s".format(time.time() - global_t_start))
