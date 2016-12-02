@@ -266,6 +266,8 @@ class PlasmaClient(object):
     num_shards = axis_len / shard_size
     left_over = axis_len % shard_size
 
+    shape = np.array(np_data.shape).ctypes.data_as(ctypes.c_void_p) # horrible HACK
+
     np_spill = None
     if shard_order == 'C':
       if not np_data.flags.c_contiguous:
@@ -286,7 +288,6 @@ class PlasmaClient(object):
 
     partition_lengths = np.array([p.size for p in partitions], dtype=np.uint64)
     void_p_partitions = np.array([p.ctypes.data_as(ctypes.c_void_p).value for p in partitions])
-    shape = np.array(np_data.shape).ctypes.data_as(ctypes.c_void_p) # horrible HACK
 
     void_handle_arr = void_p_partitions.ctypes.data_as(ctypes.c_void_p)
     shard_sizes_ptr = partition_lengths.ctypes.data_as(ctypes.c_void_p)
