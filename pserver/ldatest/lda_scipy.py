@@ -12,7 +12,7 @@ titles = lda.datasets.load_reuters_titles()
 ShardedLDAModel = sklearn.decomposition.LatentDirichletAllocation
 
 sharded_model = ShardedLDAModel(n_topics=20, n_jobs=8, max_iter=100,
-                                learning_method='batch', #evaluate_every=10,
+                                learning_method='batch', evaluate_every=10,
                                 verbose=1)
 
 t_start = time.time()
