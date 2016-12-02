@@ -30,8 +30,7 @@ from multiprocessing.pool import ThreadPool
 EPS = online_lda.EPS
 
 NUM_WORKERS = 8
-NUM_ITER = 100
-# NUM_ITER = 10
+NUM_ITER = 50
 addr_info = ray.init(start_ray_local=True, num_workers=NUM_WORKERS)
 
 # SOURCE: https://github.com/scikit-learn/scikit-learn/blob/master/sklearn/decomposition/online_lda.py
@@ -150,43 +149,36 @@ def relevant_shard_ranges(X):
   feat_ranges.append(tuple(cur_range))
   return feat_ranges
 
-@ray.remote
-def remote_e_step(X_id, W_id, X_shard_idx, X_shard_size, n_feats, W_shape,
-                  doc_topic_prior, max_doc_update_iter, mean_change_tol,
-                  random_seed):
-  random_state = np.random.RandomState(random_seed)
+@ray.remote(num_return_vals=NUM_ITER)
+def async_e_step(X_id, W_id, X_shard_idx, X_shard_size, n_feats, W_shape,
+                  doc_topic_prior, max_doc_update_iter, mean_change_tol):
   local_client = ray.reusables.local_client
   X_range = (X_shard_idx * X_shard_size, min((X_shard_idx+1)*X_shard_size, n_feats))
   X_local = local_client.pull(X_id, X_range)
 
-  # relevant_shards = relevant_shard_ranges(X_local)
-  # relevant_exp_dirichlet_component = np.zeros(W_shape)
-  # # TODO: collapse this to one lib call
-  # for shard_range in relevant_shards:
-  #   relevant_exp_dirichlet_component[:, shard_range[0]:shard_range[1]] = \
-  #     local_client.pull(W_id, shard_range)
-  # if X_shard_idx == 0:
-  #   import ipdb; ipdb.set_trace()
-  relevant_exp_dirichlet_component = local_client.pull(W_id, (0, W_shape[-1]))
+  relevant_shards = relevant_shard_ranges(X_local)
+  relevant_exp_dirichlet_component = np.zeros(W_shape)
+  for i in range(NUM_ITER):
+    # TODO: collapse this to one lib call
+    # relevant_exp_dirichlet_component.fill(0.0)
+    # for shard_range in relevant_shards:
+    #   relevant_exp_dirichlet_component[:, shard_range[0]:shard_range[1]] = \
+    #     local_client.pull(W_id, shard_range)
+    relevant_exp_dirichlet_component[:] = local_client.pull(W_id, (0, W_shape[-1]))
 
-  doc_topics, sstats = ray_update_doc_distribution(X_local,
-                              relevant_exp_dirichlet_component,
-                              doc_topic_prior,
-                              max_doc_update_iter,
-                              mean_change_tol,
-                              cal_sstats=True,
-                              random_state=random_state)
+    doc_topics, sstats = ray_update_doc_distribution(X_local,
+                                relevant_exp_dirichlet_component,
+                                doc_topic_prior,
+                                max_doc_update_iter,
+                                mean_change_tol,
+                                cal_sstats=True,
+                                random_state=None) # TODO
 
-  # return [doc_topics, sstats]  TODO
-  return sstats
+    # return [doc_topics, sstats]  TODO
+    yield sstats
 
-def remote_em_step(model, X_id, W_id, X_shard_size, n_feats, W_shape, random_seed):
+def local_m_step(e_step_handles, model, X_id, W_id, X_shard_size, n_feats, W_shape):
   suff_stats = np.zeros_like(model.components_)
-  e_step_handles = [
-    remote_e_step.remote(X_id, W_id, i, X_shard_size, n_feats, W_shape,
-                         model.doc_topic_prior_, model.max_doc_update_iter,
-                         model.mean_change_tol, random_seed)
-    for i in range(NUM_WORKERS)]
   e_results = [ray.get(h) for h in e_step_handles]
   for sstats in e_results:
     suff_stats += sstats
@@ -194,6 +186,26 @@ def remote_em_step(model, X_id, W_id, X_shard_size, n_feats, W_shape, random_see
 
   model.components_ = model.topic_word_prior_ + suff_stats
   model.exp_dirichlet_component_ = np.exp(_dirichlet_expectation_2d(model.components_))
+
+def async_train(X, client, model, num_iters, X_id, W_id, X_shard_size, n_feats, W_shape):
+  handle_matrix = np.empty((NUM_WORKERS, num_iters), dtype=object)
+  for i in range(NUM_WORKERS):
+    iter_handles = async_e_step.remote(X_id, W_id, i, X_shard_size, n_features, W.shape,
+                                       sharded_model.doc_topic_prior_,
+                                       sharded_model.max_doc_update_iter,
+                                       sharded_model.mean_change_tol)
+    handle_matrix[i, :] = iter_handles
+
+  for j in xrange(num_iters):
+    t_start = time.time()
+    local_m_step(handle_matrix[:, j], model, X_id, W_id, X_shard_size, n_feats, W_shape)
+    client.push(W_id, (0, W_shape[-1]), model.exp_dirichlet_component_, shard_order='F')
+    print("{}/{}: duration {} s".format(j+1, num_iters, time.time() - t_start))
+    if j % 10 == 0:
+      doc_topics_distr, _ = sharded_model._e_step(X, cal_sstats=False,
+                                                  random_init=False,
+                                                  parallel=None)
+      print("perplexity: {}".format(sharded_model.perplexity(X)))
 
 
 X = lda.datasets.load_reuters().astype(np.float64)
@@ -210,10 +222,7 @@ client.init_kvstore(X_id, X, shard_order='C', shard_size=X_shard_size)
 # TODO
 ShardedLDAModel = sklearn.decomposition.LatentDirichletAllocation
 
-random_seed = int(time.time())
-sharded_model = ShardedLDAModel(n_topics=20, n_jobs=8, max_iter=NUM_ITER,
-                                learning_method='batch',
-                                random_state=random_seed)
+sharded_model = ShardedLDAModel(n_topics=20, n_jobs=8)
 sharded_model._init_latent_vars(n_features)
 
 W = sharded_model.exp_dirichlet_component_
@@ -222,16 +231,7 @@ W_SHARDS = 100
 W_shard_size = n_features / W_SHARDS
 client.init_kvstore(W_id, W, shard_order='F', shard_size=W_shard_size)
 
+# NUM_ITER = 10
 global_t_start = time.time()
-for i in xrange(NUM_ITER):
-  t_start = time.time()
-  remote_em_step(sharded_model, X_id, W_id, X_shard_size, n_features, W.shape, random_seed)
-  client.push(W_id, (0, W.shape[-1]), sharded_model.exp_dirichlet_component_, shard_order='F')
-
-  # print("{}: duration {} s".format(i, time.time() - t_start))
-  if i % 10 == 0:
-    doc_topics_distr, _ = sharded_model._e_step(X, cal_sstats=False,
-                                                random_init=False,
-                                                parallel=None)
-    print("perplexity: {}".format(sharded_model.perplexity(X, doc_topics_distr, sub_sampling=False)))
-print("ray: total duration {} s".format(time.time() - global_t_start))
+async_train(X, client, sharded_model, NUM_ITER, X_id, W_id, X_shard_size, n_features, W.shape)
+print("ray_async: total duration {} s".format(time.time() - global_t_start))
