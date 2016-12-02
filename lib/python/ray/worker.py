@@ -1,5 +1,6 @@
 from __future__ import print_function
 
+import inspect
 import hashlib
 import os
 import sys
@@ -1059,10 +1060,26 @@ def main_loop(worker=global_worker):
     function_name = worker.function_names[function_id.id()]
     try:
       arguments = get_arguments_for_execution(worker.functions[function_id.id()], args, worker) # get args from objstore
-      outputs = worker.functions[function_id.id()].executor(arguments) # execute the function
-      if len(return_object_ids) == 1:
-        outputs = (outputs,)
-      store_outputs_in_objstore(return_object_ids, outputs, worker) # store output in local object store
+      func = worker.functions[function_id.id()]
+      print('Running!')
+      if func.is_generator:
+        gen = func.yielder(arguments)
+        while True:
+          i = 0
+          try:
+            print(i)
+            outputs = gen.next()
+            i += 1
+          except StopIteration:
+            break
+          if len(return_object_ids) == 1:
+            outputs = (outputs,)
+          store_outputs_in_objstore(return_object_ids, outputs, worker) # store output in local object store
+      else:
+        outputs = func.executor(arguments) # execute the function
+        if len(return_object_ids) == 1:
+          outputs = (outputs,)
+        store_outputs_in_objstore(return_object_ids, outputs, worker) # store output in local object store
     except Exception as e:
       # If the task threw an exception, then record the traceback. We determine
       # whether the exception was thrown in the task execution by whether the
@@ -1212,11 +1229,23 @@ def remote(*args, **kwargs):
         result = func(*arguments)
         end_time = time.time()
         return result
+      # TODO: document
+      def func_yielder(arguments):
+        generator = func(*arguments)
+        while True:
+          start_time = time.time()
+          result = generator.next()
+          end_time = time.time()
+          yield result
       def func_invoker(*args, **kwargs):
         """This is returned by the decorator and used to invoke the function."""
         raise Exception("Remote functions cannot be called directly. Instead of running '{}()', try '{}.remote()'.".format(func_name, func_name))
       func_invoker.remote = func_call
-      func_invoker.executor = func_executor
+      func_invoker.is_generator = inspect.isgeneratorfunction(func)
+      if func_invoker.is_generator:
+        func_invoker.yielder = func_yielder
+      else:
+        func_invoker.executor = func_executor
       func_invoker.is_remote = True
       func_name = "{}.{}".format(func.__module__, func.__name__)
       func_invoker.func_name = func_name
