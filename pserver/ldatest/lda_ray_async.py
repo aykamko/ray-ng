@@ -30,7 +30,7 @@ from multiprocessing.pool import ThreadPool
 EPS = online_lda.EPS
 
 NUM_WORKERS = 8
-NUM_ITER = 50
+NUM_ITER = 100
 addr_info = ray.init(start_ray_local=True, num_workers=NUM_WORKERS)
 
 # SOURCE: https://github.com/scikit-learn/scikit-learn/blob/master/sklearn/decomposition/online_lda.py
@@ -159,6 +159,7 @@ def async_e_step(X_id, W_id, X_shard_idx, X_shard_size, n_feats, W_shape,
   relevant_shards = relevant_shard_ranges(X_local)
   relevant_exp_dirichlet_component = np.zeros(W_shape)
   for i in range(NUM_ITER):
+    # time.sleep(0.2)
     # TODO: collapse this to one lib call
     # relevant_exp_dirichlet_component.fill(0.0)
     # for shard_range in relevant_shards:
@@ -177,7 +178,7 @@ def async_e_step(X_id, W_id, X_shard_idx, X_shard_size, n_feats, W_shape,
     # return [doc_topics, sstats]  TODO
     yield sstats
 
-def local_m_step(e_step_handles, model, X_id, W_id, X_shard_size, n_feats, W_shape):
+def local_m_step(e_step_handles, model):
   suff_stats = np.zeros_like(model.components_)
   e_results = [ray.get(h) for h in e_step_handles]
   for sstats in e_results:
@@ -197,15 +198,19 @@ def async_train(X, client, model, num_iters, X_id, W_id, X_shard_size, n_feats, 
     handle_matrix[i, :] = iter_handles
 
   for j in xrange(num_iters):
-    t_start = time.time()
-    local_m_step(handle_matrix[:, j], model, X_id, W_id, X_shard_size, n_feats, W_shape)
+    # t_start = time.time()
+
+    local_m_step(handle_matrix[:, j], model)
     client.push(W_id, (0, W_shape[-1]), model.exp_dirichlet_component_, shard_order='F')
-    print("{}/{}: duration {} s".format(j+1, num_iters, time.time() - t_start))
+
+    # print("{}/{}: duration {} s".format(j+1, num_iters, time.time() - t_start))
+
     if j % 10 == 0:
-      doc_topics_distr, _ = sharded_model._e_step(X, cal_sstats=False,
-                                                  random_init=False,
-                                                  parallel=None)
-      print("perplexity: {}".format(sharded_model.perplexity(X)))
+      print("finished {} / {}".format(j, num_iters))
+      # doc_topics_distr, _ = sharded_model._e_step(X, cal_sstats=False,
+      #                                             random_init=False,
+      #                                             parallel=None)
+      # print("perplexity: {}".format(sharded_model.perplexity(X, doc_topics_distr)))
 
 
 X = lda.datasets.load_reuters().astype(np.float64)
@@ -235,3 +240,8 @@ client.init_kvstore(W_id, W, shard_order='F', shard_size=W_shard_size)
 global_t_start = time.time()
 async_train(X, client, sharded_model, NUM_ITER, X_id, W_id, X_shard_size, n_features, W.shape)
 print("ray_async: total duration {} s".format(time.time() - global_t_start))
+
+doc_topics_distr, _ = sharded_model._e_step(X, cal_sstats=False,
+                                            random_init=False,
+                                            parallel=None)
+print("final perplexity: {}".format(sharded_model.perplexity(X, doc_topics_distr)))

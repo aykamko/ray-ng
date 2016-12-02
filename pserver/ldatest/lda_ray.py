@@ -223,15 +223,24 @@ W_shard_size = n_features / W_SHARDS
 client.init_kvstore(W_id, W, shard_order='F', shard_size=W_shard_size)
 
 global_t_start = time.time()
-for i in xrange(NUM_ITER):
-  t_start = time.time()
+for j in xrange(NUM_ITER):
+  # t_start = time.time()
+
   remote_em_step(sharded_model, X_id, W_id, X_shard_size, n_features, W.shape, random_seed)
   client.push(W_id, (0, W.shape[-1]), sharded_model.exp_dirichlet_component_, shard_order='F')
 
   # print("{}: duration {} s".format(i, time.time() - t_start))
-  if i % 10 == 0:
-    doc_topics_distr, _ = sharded_model._e_step(X, cal_sstats=False,
-                                                random_init=False,
-                                                parallel=None)
-    print("perplexity: {}".format(sharded_model.perplexity(X, doc_topics_distr, sub_sampling=False)))
+
+  if j % 10 == 0:
+    print("finished {} / {}".format(j, NUM_ITER))
+
+  #   doc_topics_distr, _ = sharded_model._e_step(X, cal_sstats=False,
+  #                                               random_init=False,
+  #                                               parallel=None)
+  #   print("perplexity: {}".format(sharded_model.perplexity(X, doc_topics_distr, sub_sampling=False)))
 print("ray: total duration {} s".format(time.time() - global_t_start))
+
+doc_topics_distr, _ = sharded_model._e_step(X, cal_sstats=False,
+                                            random_init=False,
+                                            parallel=None)
+print("final perplexity: {}".format(sharded_model.perplexity(X, doc_topics_distr)))
