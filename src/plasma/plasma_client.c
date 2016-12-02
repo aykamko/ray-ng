@@ -1048,5 +1048,4 @@ void plasma_push(plasma_connection *conn,
 
   size -= copy_size;
   data += copy_size * 8;
-  printf("done\n");
 }

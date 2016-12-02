@@ -1061,20 +1061,11 @@ def main_loop(worker=global_worker):
     try:
       arguments = get_arguments_for_execution(worker.functions[function_id.id()], args, worker) # get args from objstore
       func = worker.functions[function_id.id()]
-      print('Running!')
       if func.is_generator:
         gen = func.yielder(arguments)
-        while True:
-          i = 0
-          try:
-            print(i)
-            outputs = gen.next()
-            i += 1
-          except StopIteration:
-            break
-          if len(return_object_ids) == 1:
-            outputs = (outputs,)
-          store_outputs_in_objstore(return_object_ids, outputs, worker) # store output in local object store
+        for i, iter_object_id in enumerate(return_object_ids):
+          outputs = gen.next()
+          store_outputs_in_objstore([iter_object_id], [outputs], worker) # store output in local object store
       else:
         outputs = func.executor(arguments) # execute the function
         if len(return_object_ids) == 1:
