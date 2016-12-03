@@ -19,17 +19,19 @@ fi
 COMMON_DIR="$ROOT_DIR/src/common"
 PLASMA_DIR="$ROOT_DIR/src/plasma"
 PHOTON_DIR="$ROOT_DIR/src/photon"
+GLOBAL_SCHEDULER_DIR="$ROOT_DIR/src/global_scheduler"
 
 PYTHON_DIR="$ROOT_DIR/lib/python"
 PYTHON_COMMON_DIR="$PYTHON_DIR/common"
 PYTHON_PLASMA_DIR="$PYTHON_DIR/plasma"
 PYTHON_PHOTON_DIR="$PYTHON_DIR/photon"
+PYTHON_GLOBAL_SCHEDULER_DIR="$PYTHON_DIR/global_scheduler"
 
 pushd "$PLASMA_DIR"
-  make debug
-  make test
+  make clean
+  make
   pushd "$PLASMA_DIR/build"
-    cmake -DCMAKE_CXX_FLAGS="-g2" -DCMAKE_C_FLAGS="-g2" ..
+    cmake ..
     make install
   popd
 popd
