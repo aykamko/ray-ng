@@ -110,9 +110,9 @@ PyObject *PyPlasma_get(PyObject *self, PyObject *args) {
   int64_t metadata_size;
   uint8_t *metadata;
 
-  Py_BEGIN_ALLOW_THREADS
+  /* Py_BEGIN_ALLOW_THREADS */
   plasma_get(conn, object_id, &size, &data, &metadata_size, &metadata);
-  Py_END_ALLOW_THREADS
+  /* Py_END_ALLOW_THREADS */
 
   PyObject *t = PyTuple_New(2);
   PyTuple_SetItem(t, 0, PyBuffer_FromMemory((void *) data, (Py_ssize_t) size));

@@ -23,8 +23,8 @@ def dprint(thing):
         print(thing)
 
 # Start ray
-# NUM_WORKERS = 8
-NUM_WORKERS = 5
+NUM_WORKERS = 8
+# NUM_WORKERS = 4
 NUM_GLOBAL_ITERS = 100
 NUM_W_SHARDS = 10
 NUM_WORKER_ITERS = NUM_GLOBAL_ITERS * NUM_W_SHARDS
@@ -32,8 +32,12 @@ addr_info = ray.init(start_ray_local=True, num_workers=NUM_WORKERS)
 
 
 # LR hyperparams
-ALPHA = 1e-4
-ETA = 0.02
+ALPHA = 0.1
+BETA = 1
+ETA = 0.1
+
+LAMBDA1 = 4
+LAMBDA2 = 1e-4
 
 
 # Source: https://github.com/scikit-learn/scikit-learn/blob/a5ab948/sklearn/linear_model/logistic.py#L78
@@ -69,11 +73,11 @@ def async_compute_lr_grads(worker_idx, X_local, y_local, Wid, X_shard_idx, X_sha
     dprint("started worker {}".format(worker_idx))
     local_client = ray.reusables.local_client
 
+    j = 0
     for i in range(NUM_WORKER_ITERS):
-        if i > 0:
-            time.sleep(100)
         # TODO: tau-synchronization
-        W_shard_idx = 0
+        j = (j + 1) % num_w_shards
+        W_shard_idx = j
         # W_shard_idx = np.random.randint(0, num_w_shards)
         W_range = (W_shard_idx*W_shard_size, min((W_shard_idx+1)*W_shard_size, n_feats))
         W_shard = local_client.pull(Wid, W_range) # TODO: reuse a numpy array here
@@ -84,26 +88,62 @@ def async_compute_lr_grads(worker_idx, X_local, y_local, Wid, X_shard_idx, X_sha
         yield (W_shard_idx, grad)
 
 
-def driver_aggregate(worker_idx, W, Wid, worker_handles, W_shard_queues):
+#  float old_w = w.w;
+#  w.w = penalty.Solve(eta * w.w - grad[0], eta);
+#  Update(w.w, old_w);
+
+# inline T Solve(T z, T eta) {
+#   // soft-thresholding
+#   CHECK_GT(eta, 0);
+#   if (z <= lambda1_ && z >= -lambda1_) return 0;
+#   return (z > 0 ? z - lambda1_ : z + lambda1_) / (eta + lambda2_);
+# }
+
+#  inline static void Update(float cur_w, float old_w) {
+#    if (old_w == 0 && cur_w != 0) {
+#      ++ new_w;
+#    } else if (old_w != 0 && cur_w == 0) {
+#      -- new_w;
+#    }
+#  }
+def apply_grad(W, g, eta):
+    z = eta*W - g
+    z[z <= LAMBDA1] = 0
+    z[z <= -LAMBDA1] = 0
+    z[z > 0] -= LAMBDA1
+    z[z < 0] += LAMBDA1
+    z /= eta + LAMBDA2
+    return z
+
+FOREVER = 999999
+def driver_aggregate(client, worker_idx, W, Wid, W_shard_size, n_feats,
+                     worker_handles, W_shard_queues, eta, total_t):
     dprint("started aggregate for worker {}".format(worker_idx))
     for i in range(NUM_WORKER_ITERS):
-        time.sleep(1)
+        ray.wait([worker_handles[i]], timeout=FOREVER)
         result = ray.get(worker_handles[i])
         W_shard_idx, grad = result
-        dprint("got grad for shard {} from worker {}".format(W_shard_idx, worker_idx))
 
-        # W_shard_queues[W_shard_idx, worker_idx].put(grad)
-        #
-        # should_apply = not any([W_shard_queues[W_shard_idx, i].empty() for i in range(NUM_WORKERS)])
-        # if not should_apply:
-        #     continue
-        #
-        # dprint("accumed grad for shard {}".format(W_shard_idx))
-        # accum_grad = np.zeros_like(grad)
-        # for i in range(NUM_WORKERS):
-        #     accum_grad += W_shard_queues[W_shard_idx, i].get()
+        W_shard_queues[W_shard_idx, worker_idx].put(grad)
 
-        # TODO: apply gradient
+        should_apply = not any([W_shard_queues[W_shard_idx, i].empty() for i in range(NUM_WORKERS)])
+        if not should_apply:
+            continue
+
+        accum_grad = np.zeros_like(grad)
+        for i in range(NUM_WORKERS):
+            accum_grad += W_shard_queues[W_shard_idx, i].get()
+
+        W_range = (W_shard_idx*W_shard_size, min((W_shard_idx+1)*W_shard_size, n_feats))
+        new_W_shard = apply_grad(W[range(*W_range)], accum_grad, eta)
+
+        client.push(Wid, W_range, new_W_shard)
+        W[range(*W_range)] = new_W_shard
+
+        total_t += 1
+        eta = BETA + np.sqrt(total_t) / ALPHA
+
+        dprint("applied grad for shard {}".format(W_shard_idx))
 
 
 def fit_async(X, y):
@@ -134,8 +174,12 @@ def fit_async(X, y):
           n_features)
       handle_matrix[i, :] = iter_handles
 
+    total_t = 0
+    eta = BETA + np.sqrt(total_t) / ALPHA
+
     def thread_driver_aggregate(i):
-        driver_aggregate(i, W, Wid, handle_matrix[i], W_shard_queues)
+        driver_aggregate(client, i, W, Wid, W_shard_size, n_features,
+                         handle_matrix[i], W_shard_queues, eta, total_t)
 
     pool = ThreadPool(NUM_WORKERS)
     pool.map(thread_driver_aggregate, range(NUM_WORKERS))
