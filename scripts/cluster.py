@@ -61,7 +61,8 @@ class RayCluster(object):
     """
     if "'" in command:
       raise Exception("Commands run over ssh must not contain the single quote character. This command does: {}".format(command))
-    full_command = "ssh -o StrictHostKeyChecking=no -i {} {}@{} '{}'".format(self.key_file, self.username, node_ip_address, command)
+    # full_command = "ssh -o StrictHostKeyChecking=no -i {} {}@{} '{}'".format(self.key_file, self.username, node_ip_address, command)
+    full_command = "ssh -o StrictHostKeyChecking=no {}@{} '{}'".format(self.username, node_ip_address, command)
     subprocess.call([full_command], shell=True)
     print "Finished running command '{}' on {}@{}.".format(command, self.username, node_ip_address)
 
@@ -252,9 +253,12 @@ class RayCluster(object):
     self.run_command_over_ssh_on_all_nodes_in_parallel(recreate_directory_command)
     # Copy the files from the local machine to the node.
     def copy_function(node_ip_address):
+      # copy_command = """
+      #   scp -r -i {} {}/* {}@{}:{}/
+      # """.format(self.key_file, user_source_directory, self.username, node_ip_address, remote_directory)
       copy_command = """
-        scp -r -i {} {}/* {}@{}:{}/
-      """.format(self.key_file, user_source_directory, self.username, node_ip_address, remote_directory)
+        scp -r {}/* {}@{}:{}/
+      """.format(user_source_directory, self.username, node_ip_address, remote_directory)
       subprocess.call([copy_command], shell=True)
     inputs = [(node_ip_address,) for node_ip_address in node_ip_addresses]
     self._run_parallel_functions(len(self.node_ip_addresses) * [copy_function], inputs)
@@ -315,7 +319,8 @@ if __name__ == "__main__":
   # used for installing Ray. Note that single quotes around 'echo $HOME' are
   # important. If you use double quotes, then the $HOME environment variable
   # will be expanded locally instead of remotely.
-  echo_home_command = "ssh -o StrictHostKeyChecking=no -i {} {}@{} 'echo $HOME'".format(key_file, username, node_ip_addresses[0])
+  # echo_home_command = "ssh -o StrictHostKeyChecking=no -i {} {}@{} 'echo $HOME'".format(key_file, username, node_ip_addresses[0])
+  echo_home_command = "ssh -o StrictHostKeyChecking=no {}@{} 'echo $HOME'".format(username, node_ip_addresses[0])
   installation_directory = subprocess.check_output(echo_home_command, shell=True).strip()
   print "Using '{}' as the home directory on the cluster.".format(installation_directory)
   # Create the Raycluster object.
