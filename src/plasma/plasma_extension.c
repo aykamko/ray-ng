@@ -93,6 +93,11 @@ PyObject *PyPlasma_release(PyObject *self, PyObject *args) {
   Py_RETURN_NONE;
 }
 
+int PyGILState_Check2(void) {
+    PyThreadState * tstate = _PyThreadState_Current;
+    return tstate && (tstate == PyGILState_GetThisThreadState());
+}
+
 PyObject *PyPlasma_get(PyObject *self, PyObject *args) {
   plasma_connection *conn;
   object_id object_id;
@@ -104,7 +109,11 @@ PyObject *PyPlasma_get(PyObject *self, PyObject *args) {
   uint8_t *data;
   int64_t metadata_size;
   uint8_t *metadata;
+
+  Py_BEGIN_ALLOW_THREADS
   plasma_get(conn, object_id, &size, &data, &metadata_size, &metadata);
+  Py_END_ALLOW_THREADS
+
   PyObject *t = PyTuple_New(2);
   PyTuple_SetItem(t, 0, PyBuffer_FromMemory((void *) data, (Py_ssize_t) size));
   PyTuple_SetItem(t, 1, PyByteArray_FromStringAndSize(
