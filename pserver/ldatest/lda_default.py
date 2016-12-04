@@ -128,46 +128,14 @@ def ray_update_doc_distribution(X, exp_topic_word_distr, doc_topic_prior,
 
     return (doc_topic_distr, suff_stats)
 
-def worker_client_initializer():
-    return PlasmaClient(addr_info['object_store_name'])
-ray.reusables.local_client = ray.Reusable(worker_client_initializer, lambda x: x)
-
-def relevant_shard_ranges(X):
-  # NOTE: assumes at least one element
-  nzc = sorted(np.unique(np.nonzero(X)[1]))
-  feat_ranges = []
-  range_start = nzc[0]
-  cur_range = [range_start, range_start+1]
-  for nzidx in nzc[1:]:
-    shard_idx = nzidx
-    if shard_idx < cur_range[1]:
-      continue
-    elif shard_idx == cur_range[1]:
-      cur_range[1] += 1
-    else:
-      feat_ranges.append(tuple(cur_range))
-      cur_range = [shard_idx, shard_idx+1]
-  feat_ranges.append(tuple(cur_range))
-  return feat_ranges
-
 @ray.remote
-def remote_e_step(X_id, W_id, X_shard_idx, X_shard_size, n_feats, W_shape,
+def remote_e_step(X_id, W_id,
                   doc_topic_prior, max_doc_update_iter, mean_change_tol,
                   random_seed):
   random_state = np.random.RandomState(random_seed)
-  local_client = ray.reusables.local_client
-  X_range = (X_shard_idx * X_shard_size, min((X_shard_idx+1)*X_shard_size, n_feats))
-  X_local = local_client.pull(X_id, X_range)
+  X_local = X_id #ray.get(X_id)
 
-  # relevant_shards = relevant_shard_ranges(X_local)
-  # relevant_exp_dirichlet_component = np.zeros(W_shape)
-  # # TODO: collapse this to one lib call
-  # for shard_range in relevant_shards:
-  #   relevant_exp_dirichlet_component[:, shard_range[0]:shard_range[1]] = \
-  #     local_client.pull(W_id, shard_range)
-  # if X_shard_idx == 0:
-  #   import ipdb; ipdb.set_trace()
-  relevant_exp_dirichlet_component = local_client.pull(W_id, (0, W_shape[-1]))
+  relevant_exp_dirichlet_component = W_id#ray.get(W_id)
 
   doc_topics, sstats = ray_update_doc_distribution(X_local,
                               relevant_exp_dirichlet_component,
@@ -180,10 +148,10 @@ def remote_e_step(X_id, W_id, X_shard_idx, X_shard_size, n_feats, W_shape,
   # return [doc_topics, sstats]  TODO
   return sstats
 
-def remote_em_step(model, X_id, W_id, X_shard_size, n_feats, W_shape, random_seed):
+def remote_em_step(model, X_ids, W_id, random_seed):
   suff_stats = np.zeros_like(model.components_)
   e_step_handles = [
-    remote_e_step.remote(X_id, W_id, i, X_shard_size, n_feats, W_shape,
+    remote_e_step.remote(X_ids[i], W_id,
                          model.doc_topic_prior_, model.max_doc_update_iter,
                          model.mean_change_tol, random_seed)
     for i in range(NUM_WORKERS)]
@@ -200,13 +168,8 @@ X = lda.datasets.load_reuters().astype(np.float64)
 n_samples, n_features = X.shape
 vocab = lda.datasets.load_reuters_vocab()
 titles = lda.datasets.load_reuters_titles()
-
-client = PlasmaClient(addr_info['object_store_name'])
-
-X_id = "x"*20
-X_shard_size = n_samples / NUM_WORKERS
-client.init_kvstore(X_id, X, shard_order='C', shard_size=X_shard_size)
-
+partitions = np.array_split(X, 8)
+X_ids = [ray.put(i) for i in partitions]
 # TODO
 ShardedLDAModel = sklearn.decomposition.LatentDirichletAllocation
 
@@ -216,26 +179,21 @@ sharded_model = ShardedLDAModel(n_topics=20, n_jobs=8, max_iter=NUM_ITER,
                                 random_state=random_seed)
 sharded_model._init_latent_vars(n_features)
 
-W = sharded_model.exp_dirichlet_component_
-W_id = "w"*20
-W_SHARDS = 100
-W_shard_size = n_features / W_SHARDS
-client.init_kvstore(W_id, W, shard_order='F', shard_size=W_shard_size)
+W_id = ray.put(sharded_model.exp_dirichlet_component_)
 
 times = []
-for _ in range(10):
+for _ in xrange(10):
     global_t_start = time.time()
     for j in xrange(NUM_ITER):
       # t_start = time.time()
 
-      remote_em_step(sharded_model, X_id, W_id, X_shard_size, n_features, W.shape, random_seed)
-      client.push(W_id, (0, W.shape[-1]), sharded_model.exp_dirichlet_component_, shard_order='F')
-
+      remote_em_step(sharded_model, partitions, W_id, random_seed)
+      W_id = sharded_model.exp_dirichlet_component_ #ray.put(sharded_model.exp_dirichlet_component_)
       # print("{}: duration {} s".format(i, time.time() - t_start))
 
     #   if j % 10 == 0:
     #     print("finished {} / {}".format(j, NUM_ITER))
-
+      #
       #   doc_topics_distr, _ = sharded_model._e_step(X, cal_sstats=False,
       #                                               random_init=False,
       #                                               parallel=None)

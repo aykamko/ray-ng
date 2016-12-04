@@ -22,25 +22,25 @@ def worker_client_initializer():
     return PlasmaClient(addr_info['object_store_name'])
 ray.reusables.local_client = ray.Reusable(worker_client_initializer, lambda x: x)
 
-# Define a remote function for estimating pi.
-@ray.remote
-def estimate_pi(n, X_id, X_shard_idx, X_shard_size, n_feats):
+@ray.remote(num_return_vals=NUM_ITER)
+def estimate_pi_yield(n, X_id, X_shard_idx, X_shard_size, n_feats):
   local_client = ray.reusables.local_client
   X_range = (X_shard_idx * X_shard_size,
              min((X_shard_idx + 1) * X_shard_size, n_feats))
   X_local = local_client.pull(X_id, X_range)
-  x = np.random.uniform(size=n)
-  y = np.random.uniform(size=n)
-  return 4 * np.mean(x ** 2 + y ** 2 < 1)
 
-# Launch 10 tasks, each of which estimates pi.
+  for i in range(NUM_ITER):
+    x = np.random.uniform(size=n)
+    y = np.random.uniform(size=n)
+    yield 4 * np.mean(x ** 2 + y ** 2 < 1)
+
+def pi_asynch(X_id, X_shard_size, n_feats):
+    handle_matrix = np.empty((NUM_WORKERS, NUM_ITER), dtype=object)
+    for i in range(NUM_WORKERS):
+        iter_handles = estimate_pi_yield.remote(10000, X_id, i, X_shard_size, n_features)
+        handle_matrix[i, :] = iter_handles
+    return np.mean(ray.get([i for i in handle_matrix.flatten()]))
+
 start = time.time()
-result_ids = []
-estimate = 0
-for j in range(NUM_ITER):
-    for _ in range(NUM_WORKERS):
-      result_ids.append(estimate_pi.remote(10000, X_id, _, X_shard_size, n_features))
-
-# Fetch the results of the tasks and print their average.
-estimate = np.mean(ray.get(result_ids))
-print "Pi is approximately {} in {}".format(estimate, time.time()-start)
+e = pi_asynch(X_id, X_shard_size, n_features)
+print "Pi is approximately {} in {}".format(e, time.time()-start)
