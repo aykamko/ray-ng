@@ -96,8 +96,10 @@ def async_compute_lr_grads(worker_idx, X_local, y_local, Wid, tauid, X_shard_idx
         X_slice = X_local[:, range(*W_range)]
 
         _, grad = logistic_grad(W_shard, X_slice, y_local, ALPHA)
-        # dprint("worker {}: iter {}, computed grad for shard {}".format(worker_idx, i, W_shard_idx))
+        dprint("worker {}: computed grad {} for shard {}".format(worker_idx, i, W_shard_idx))
         yield (W_shard_idx, grad)
+
+    print("worker {} finished!".format(worker_idx))
 
 
 # Some block PG code from ps-lite
@@ -131,13 +133,13 @@ def driver_aggregate(client, worker_idx, W, Wid, W_shard_size, n_feats,
 
     dprint("started aggregate for worker {}".format(worker_idx))
     for i in range(NUM_WORKER_ITERS):
-        dprint("waiting for grad {} from {}".format(i, worker_idx))
+        dprint("aggreg {} waiting for grad {}".format(worker_idx, i))
         ray.wait([worker_handles[i]], timeout=FOREVER)
         result = ray.get(worker_handles[i])
         TOTAL_RECIEVED += 1
         W_shard_idx, grad = result
-        dprint("(total {}) aggreg {}, recieved grad for shard {}".format(
-            TOTAL_RECIEVED, worker_idx, W_shard_idx))
+        dprint("aggreg {}, recieved grad {} for shard {}".format(
+            worker_idx, i, W_shard_idx))
 
         with W_shard_locks[W_shard_idx]:
             W_shard_queues[W_shard_idx, worker_idx].append(grad)
@@ -146,7 +148,6 @@ def driver_aggregate(client, worker_idx, W, Wid, W_shard_size, n_feats,
             should_apply = all(nonempty_slots)
             dprint("aggreg {}, recieved grad for shard {}, grads recieved: {}".format(
                 worker_idx, W_shard_idx, np.sum(nonempty_slots)))
-            # dprint("nonempty_slots: {}".format(nonempty_slots))
             if not should_apply:
                 continue
 
@@ -155,20 +156,22 @@ def driver_aggregate(client, worker_idx, W, Wid, W_shard_size, n_feats,
             for k in range(NUM_WORKERS):
                 accum_grad += W_shard_queues[W_shard_idx, k].pop()
 
-        W_range = (W_shard_idx*W_shard_size, min((W_shard_idx+1)*W_shard_size, n_feats))
-        new_W_shard = apply_grad(W[range(*W_range)], accum_grad, eta)
+            W_range = (W_shard_idx*W_shard_size, min((W_shard_idx+1)*W_shard_size, n_feats))
+            new_W_shard = apply_grad(W[range(*W_range)], accum_grad, eta)
 
-        # import ipdb; ipdb.set_trace()
-        print(W_shard_idx, new_W_shard.shape, W_range)
-        client.push(Wid, W_range, new_W_shard)
-        tau[W_shard_idx] += 1
-        client.push(tauid, (W_shard_idx, W_shard_idx+1), np.array(tau[W_shard_idx]))
-        W[range(*W_range)] = new_W_shard
+            # import ipdb; ipdb.set_trace()
+            print(W_shard_idx, new_W_shard.shape, W_range)
+            client.push(Wid, W_range, new_W_shard)
+            tau[W_shard_idx] += 1
+            client.push(tauid, (W_shard_idx, W_shard_idx+1), np.array(tau[W_shard_idx]))
+            W[range(*W_range)] = new_W_shard
 
         total_t += 1
         eta = BETA + np.sqrt(total_t) / ALPHA
 
         dprint("applied grad for shard {}".format(W_shard_idx))
+
+    print("aggregator {} finished!".format(worker_idx))
 
 
 def fit_async(X, y):
