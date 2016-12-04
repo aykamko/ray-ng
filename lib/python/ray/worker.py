@@ -1066,8 +1066,8 @@ def main_loop(worker=global_worker):
       if func.is_generator:
         gen = func.yielder(arguments)
         for i, iter_object_id in enumerate(return_object_ids):
-          outputs = gen.next()
-          store_outputs_in_objstore([iter_object_id], [outputs], worker) # store output in local object store
+          output = gen.next()
+          worker.put_object(iter_object_id, output)
       else:
         outputs = func.executor(arguments) # execute the function
         if len(return_object_ids) == 1:

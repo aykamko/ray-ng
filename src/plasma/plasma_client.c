@@ -574,11 +574,37 @@ int plasma_wait(plasma_connection *conn,
   }
   req->num_ready_objects = num_returns;
   req->timeout = timeout;
+
+  printf("waiting for %d %d %d %d %d %d %d %d %d %d\n",
+      object_ids[0].id[0],
+      object_ids[0].id[1],
+      object_ids[0].id[2],
+      object_ids[0].id[3],
+      object_ids[0].id[4],
+      object_ids[0].id[5],
+      object_ids[0].id[6],
+      object_ids[0].id[7],
+      object_ids[0].id[8],
+      object_ids[0].id[9]);
+
   CHECK(plasma_send_request(conn->manager_conn, PLASMA_WAIT, req) >= 0);
   plasma_free_request(req);
   int64_t return_size = plasma_reply_size(num_returns);
   plasma_reply *reply = malloc(return_size);
   CHECK(plasma_receive_reply(conn->manager_conn, return_size, reply) >= 0);
+
+  printf("finished wait for %d %d %d %d %d %d %d %d %d %d\n",
+      object_ids[0].id[0],
+      object_ids[0].id[1],
+      object_ids[0].id[2],
+      object_ids[0].id[3],
+      object_ids[0].id[4],
+      object_ids[0].id[5],
+      object_ids[0].id[6],
+      object_ids[0].id[7],
+      object_ids[0].id[8],
+      object_ids[0].id[9]);
+
   for (int i = 0; i < num_returns; ++i) {
     return_object_ids[i] = reply->object_requests[i].object_id;
   }

@@ -17,13 +17,17 @@ from threading import Thread, RLock
 from multiprocessing import Process
 from multiprocessing.pool import ThreadPool
 
+WDEBUG = 1
 DEBUG = 1
-def dprint(thing):
-    if DEBUG:
+def dprint(thing, level=3):
+    if DEBUG >= level:
+        print(thing)
+def wprint(thing, level=3):
+    if WDEBUG >= level:
         print(thing)
 
 # Start ray
-NUM_WORKERS = 8
+NUM_WORKERS = 6
 NUM_GLOBAL_ITERS = 100
 NUM_W_SHARDS = 5
 NUM_WORKER_ITERS = NUM_GLOBAL_ITERS * NUM_W_SHARDS
@@ -66,12 +70,12 @@ ray.reusables.local_client = ray.Reusable(worker_client_initializer, lambda x: x
 
 
 # TAU_DELAY = 8
-TAU_DELAY = 1
+TAU_DELAY = 0
 @ray.remote(num_return_vals=NUM_WORKER_ITERS)
 def async_compute_lr_grads(worker_idx, X_local, y_local, Wid, tauid, X_shard_idx, X_shard_size,
                            W_shard_size, num_w_shards, n_feats):
 
-    dprint("started worker {}".format(worker_idx))
+    wprint("started worker {}".format(worker_idx))
     local_client = ray.reusables.local_client
     local_tau = np.zeros(num_w_shards)
 
@@ -79,24 +83,24 @@ def async_compute_lr_grads(worker_idx, X_local, y_local, Wid, tauid, X_shard_idx
     for i in range(NUM_WORKER_ITERS):
         if len(shards_left) == 0:
             shards_left = range(num_w_shards)
+        wprint("worker {}: starting grad {}".format(worker_idx, i))
 
         while True:
-            rnd_idx = np.random.randint(len(shards_left))
-            W_shard_idx = shards_left[rnd_idx]
+            shards_left_idx = np.random.randint(len(shards_left))
+            W_shard_idx = shards_left[shards_left_idx]
             shard_tau = int(local_client.pull(tauid, (W_shard_idx, W_shard_idx+1))[0])
-            if shard_tau >= local_tau[shard_tau] - TAU_DELAY:
-                shards_left.pop(rnd_idx)
+            if shard_tau >= local_tau[W_shard_idx] - TAU_DELAY:
+                shards_left.pop(shards_left_idx)
                 local_tau[W_shard_idx] += 1
                 break
             time.sleep(0.01)
-            # dprint("delayed on block {}".format(W_shard_idx))
 
         W_range = (W_shard_idx*W_shard_size, min((W_shard_idx+1)*W_shard_size, n_feats))
         W_shard = local_client.pull(Wid, W_range) # TODO: reuse a numpy array here
         X_slice = X_local[:, range(*W_range)]
 
         _, grad = logistic_grad(W_shard, X_slice, y_local, ALPHA)
-        dprint("worker {}: computed grad {} for shard {}".format(worker_idx, i, W_shard_idx))
+        wprint("worker {}: computed grad {} for shard {}".format(worker_idx, i, W_shard_idx))
         yield (W_shard_idx, grad)
 
     print("worker {} finished!".format(worker_idx))
@@ -123,9 +127,20 @@ def apply_grad(W, g, eta):
     z /= eta + LAMBDA2
     return z
 
-TOTAL_RECIEVED = 0
+CONTAINS_RETRIES = 10000
+def retry_get(client, handle):
+    """jank"""
+    tries = 0
+    while True:
+        if tries > CONTAINS_RETRIES:
+            raise Exception('halp')
+        if client.contains(handle.id()):
+            break
+        time.sleep(0.1)
+        tries += 1
+    return ray.get(handle)
 
-FOREVER = 999999
+TOTAL_RECIEVED = 0
 def driver_aggregate(client, worker_idx, W, Wid, W_shard_size, n_feats,
                      worker_handles, W_shard_queues, W_shard_locks,
                      eta, total_t, tau, tauid):
@@ -133,16 +148,16 @@ def driver_aggregate(client, worker_idx, W, Wid, W_shard_size, n_feats,
 
     dprint("started aggregate for worker {}".format(worker_idx))
     for i in range(NUM_WORKER_ITERS):
-        dprint("aggreg {} waiting for grad {}".format(worker_idx, i))
-        ray.wait([worker_handles[i]], timeout=FOREVER)
-        result = ray.get(worker_handles[i])
+        handle = worker_handles[i]
+        dprint("aggreg {} waiting for grad {} ({})".format(worker_idx, i, map(ord, handle.id()[:10])))
+        result = retry_get(client, handle)
         TOTAL_RECIEVED += 1
         W_shard_idx, grad = result
-        dprint("aggreg {}, recieved grad {} for shard {}".format(
-            worker_idx, i, W_shard_idx))
+        dprint("(TOTAL {}) aggreg {}, recieved grad {} for shard {}".format(
+            TOTAL_RECIEVED, worker_idx, i, W_shard_idx))
 
         with W_shard_locks[W_shard_idx]:
-            W_shard_queues[W_shard_idx, worker_idx].append(grad)
+            W_shard_queues[W_shard_idx, worker_idx].append((handle, grad))
 
             nonempty_slots = [len(W_shard_queues[W_shard_idx, j]) > 0 for j in range(NUM_WORKERS)]
             should_apply = all(nonempty_slots)
@@ -151,25 +166,28 @@ def driver_aggregate(client, worker_idx, W, Wid, W_shard_size, n_feats,
             if not should_apply:
                 continue
 
-            # import ipdb; ipdb.set_trace()
+            stale_handles = []
             accum_grad = np.zeros_like(grad)
             for k in range(NUM_WORKERS):
-                accum_grad += W_shard_queues[W_shard_idx, k].pop()
+                handle, grad = W_shard_queues[W_shard_idx, k].pop()
+                accum_grad += grad
+                stale_handles.append(handle)
 
             W_range = (W_shard_idx*W_shard_size, min((W_shard_idx+1)*W_shard_size, n_feats))
             new_W_shard = apply_grad(W[range(*W_range)], accum_grad, eta)
 
-            # import ipdb; ipdb.set_trace()
-            print(W_shard_idx, new_W_shard.shape, W_range)
             client.push(Wid, W_range, new_W_shard)
             tau[W_shard_idx] += 1
             client.push(tauid, (W_shard_idx, W_shard_idx+1), np.array(tau[W_shard_idx]))
             W[range(*W_range)] = new_W_shard
 
+        for h in stale_handles:
+            client.delete(h.id())
+
         total_t += 1
         eta = BETA + np.sqrt(total_t) / ALPHA
 
-        dprint("applied grad for shard {}".format(W_shard_idx))
+        dprint("applied grad for shard {}".format(W_shard_idx), level=1)
 
     print("aggregator {} finished!".format(worker_idx))
 
