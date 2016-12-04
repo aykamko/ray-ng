@@ -1092,7 +1092,16 @@ void plasma_push(plasma_connection *conn,
   axis_units /= result.shape[shard_axis];
 
   // TODO Error checking, make sure we can actually do this
-  uint64_t start = (range_start * axis_units) % result.shard_sizes[start_axis_i];
+  uint64_t scaled_start = (range_start * axis_units);
+  uint64_t start;
+  if (scaled_start == 0) {
+    start = 0;
+  } else {
+    if (result.shard_sizes[start_axis_i] == 0) {
+      printf("oh no!!!\n");
+    }
+    start = scaled_start % result.shard_sizes[start_axis_i];
+  }
   uint64_t copy_size = result.shard_sizes[start_axis_i] - start;
   copy_size = min(copy_size, size);
 
