@@ -16,8 +16,8 @@ ray.register_class(csr_matrix)
 from threading import Thread, RLock
 from multiprocessing.pool import ThreadPool
 
-WDEBUG = 3
-DEBUG = 3
+WDEBUG = 1
+DEBUG = 1
 def dprint(thing, level=3):
     if DEBUG >= level:
         print(thing)
@@ -27,11 +27,10 @@ def wprint(thing, level=3):
 
 # Start ray
 NUM_WORKERS = 4
-MAJOR_ITERS = 10
-# MINOR_ITERS = 5
-MINOR_ITERS = 2
+MAJOR_ITERS = 1
+MINOR_ITERS = 100
 NUM_GLOBAL_ITERS = MAJOR_ITERS * MINOR_ITERS
-TAU_DELAY = 2
+TAU_DELAY = 0
 
 NUM_W_SHARDS = 16
 NUM_WORKER_ITERS = MINOR_ITERS * NUM_W_SHARDS
@@ -40,7 +39,7 @@ addr_info = ray.init(start_ray_local=True, num_workers=NUM_WORKERS)
 
 
 # LR hyperparams
-ALPHA = 0.1
+ALPHA = 1e-4
 BETA = 1
 
 LAMBDA1 = 3 # rub the crystal ball
@@ -72,7 +71,7 @@ def logistic_grad(w, X, y, alpha):
     return grad
 
 def worker_client_initializer():
-    return PlasmaClient(addr_info['object_store_name'])
+    return PlasmaClient(addr_info['object_store_names'][0])
 ray.reusables.local_client = ray.Reusable(worker_client_initializer, lambda x: x)
 
 
@@ -137,15 +136,15 @@ def apply_grad(W, g, eta):
 CONTAINS_RETRIES = 10000
 def retry_get(client, handle):
     """jank"""
-    # tries = 0
-    # while True:
-    #     time.sleep(0.1)
-    #     if tries > CONTAINS_RETRIES:
-    #         raise Exception('halp')
-    #     if client.contains(handle.id()):
-    #         break
-    #     tries += 1
-    ray.wait([handle])
+    tries = 0
+    while True:
+        time.sleep(0.04)
+        if tries > CONTAINS_RETRIES:
+            raise Exception('halp')
+        if client.contains(handle.id()):
+            break
+        tries += 1
+    # ray.wait([handle], timeout=100)
     return ray.get(handle)
 
 TOTAL_RECIEVED = 0
@@ -193,12 +192,12 @@ def driver_aggregate(client, worker_idx, W, Wid, W_shard_size, n_feats,
         total_t += 1
         eta = BETA + np.sqrt(total_t) / ALPHA
 
-        dprint("applied grad for shard {}".format(W_shard_idx), level=1)
+        dprint("applied grad for shard {}: {}".format(W_shard_idx, tau), level=1)
 
     print("aggregator {} finished!".format(worker_idx))
 
 def fit_async(X, y):
-    client = PlasmaClient(addr_info['object_store_name'])
+    client = PlasmaClient(addr_info['object_store_names'][0])
 
     n_samples, n_features = X.shape
 
@@ -233,7 +232,7 @@ def fit_async(X, y):
     pool = ThreadPool(NUM_WORKERS)
 
     X_shard_ids, y_shard_ids = [], []
-    print("shading and putting X...")
+    print("sharding and putting X...")
     for i in range(NUM_WORKERS):
         shard_range = (i*X_shard_size, min((i+1)*X_shard_size, n_features))
         X_shard_ids.append(ray.put(X[range(*shard_range)]))
@@ -281,14 +280,3 @@ if __name__ == '__main__':
 
     print("starting async fit")
     fit_async(X_tr_sparse, y_tr)
-
-# n_samples, n_features = X_tr.shape
-# W = np.zeros((n_features,))
-#
-# eta = 0.02
-# alpha = 1e-4
-# for i in range(100):
-#     loss, grad = logistic_grad(W, X_tr, y_tr, alpha)
-#     if i % 10 == 0:
-#         print("{} / 100 loss: {}".format(i, loss))
-#     W -= eta * grad
