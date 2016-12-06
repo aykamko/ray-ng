@@ -16,8 +16,8 @@ ray.register_class(csr_matrix)
 from threading import Thread, RLock
 from multiprocessing.pool import ThreadPool
 
-WDEBUG = 1
-DEBUG = 1
+WDEBUG = 3
+DEBUG = 3
 def dprint(thing, level=3):
     if DEBUG >= level:
         print(thing)
@@ -137,14 +137,15 @@ def apply_grad(W, g, eta):
 CONTAINS_RETRIES = 10000
 def retry_get(client, handle):
     """jank"""
-    tries = 0
-    while True:
-        time.sleep(0.1)
-        if tries > CONTAINS_RETRIES:
-            raise Exception('halp')
-        if client.contains(handle.id()):
-            break
-        tries += 1
+    # tries = 0
+    # while True:
+    #     time.sleep(0.1)
+    #     if tries > CONTAINS_RETRIES:
+    #         raise Exception('halp')
+    #     if client.contains(handle.id()):
+    #         break
+    #     tries += 1
+    ray.wait([handle])
     return ray.get(handle)
 
 TOTAL_RECIEVED = 0
@@ -231,11 +232,13 @@ def fit_async(X, y):
 
     pool = ThreadPool(NUM_WORKERS)
 
-    X_shards, y_shards = [], []
+    X_shard_ids, y_shard_ids = [], []
+    print("shading and putting X...")
     for i in range(NUM_WORKERS):
         shard_range = (i*X_shard_size, min((i+1)*X_shard_size, n_features))
-        X_shards.append(X[range(*shard_range)])
-        y_shards.append(y[range(*shard_range)])
+        X_shard_ids.append(ray.put(X[range(*shard_range)]))
+        y_shard_ids.append(ray.put(y[range(*shard_range)]))
+    print("done")
 
     for mi in range(MAJOR_ITERS):
         print("mi {}, loss {}".format(mi, logistic_loss(W, X, y, ALPHA)))
@@ -243,7 +246,7 @@ def fit_async(X, y):
         for i in range(NUM_WORKERS):
             dprint("about to start worker {}".format(i))
             iter_handles = async_compute_lr_grads.remote(
-                i, X_shards[i], y_shards[i], Wid, tauid, i, X_shard_size, W_shard_size,
+                i, X_shard_ids[i], y_shard_ids[i], Wid, tauid, i, X_shard_size, W_shard_size,
                 NUM_W_SHARDS, # TODO: not always true
                 n_features)
             handle_matrix[i, :] = iter_handles
@@ -276,18 +279,16 @@ if __name__ == '__main__':
     X_tr_sparse, y_tr = load_data()
     print("finished load: {}".format(end_timer()))
 
-    print("finished load, starting async fit")
+    print("starting async fit")
     fit_async(X_tr_sparse, y_tr)
 
-    # n_samples, n_features = X_tr.shape
-    # W = np.zeros((n_features,))
-    #
-    # eta = 0.02
-    # alpha = 1e-4
-    # logloss = Log()
-    # for i in range(100):
-    #     p = safe_sparse_dot(X_tr, W)
-    #     loss, grad = logistic_grad(W, X_tr, y_tr, alpha)
-    #     if i % 10 == 0:
-    #         print("{} / 100 loss: {}".format(i, loss))
-    #     W -= eta * grad
+# n_samples, n_features = X_tr.shape
+# W = np.zeros((n_features,))
+#
+# eta = 0.02
+# alpha = 1e-4
+# for i in range(100):
+#     loss, grad = logistic_grad(W, X_tr, y_tr, alpha)
+#     if i % 10 == 0:
+#         print("{} / 100 loss: {}".format(i, loss))
+#     W -= eta * grad
