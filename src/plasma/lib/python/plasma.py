@@ -174,6 +174,9 @@ class PlasmaClient(object):
     """
     libplasma.seal(self.conn, object_id)
 
+  def release(self, object_id):
+    libplasma.release(self.conn, object_id)
+
   def delete(self, object_id):
     """Delete the buffer in the PlasmaStore for a particular object ID.
 

@@ -14,7 +14,6 @@ ray.register_class(csr_matrix)
 # from sklearn.linear_model.sgd_fast import Log
 
 from threading import Thread, RLock
-from multiprocessing import Process
 from multiprocessing.pool import ThreadPool
 
 WDEBUG = 1
@@ -27,12 +26,14 @@ def wprint(thing, level=3):
         print(thing)
 
 # Start ray
-NUM_WORKERS = 1 # 6
+NUM_WORKERS = 4
 MAJOR_ITERS = 10
-MINOR_ITERS = 10
+# MINOR_ITERS = 5
+MINOR_ITERS = 2
 NUM_GLOBAL_ITERS = MAJOR_ITERS * MINOR_ITERS
+TAU_DELAY = 2
 
-NUM_W_SHARDS = 5
+NUM_W_SHARDS = 16
 NUM_WORKER_ITERS = MINOR_ITERS * NUM_W_SHARDS
 
 addr_info = ray.init(start_ray_local=True, num_workers=NUM_WORKERS)
@@ -41,9 +42,8 @@ addr_info = ray.init(start_ray_local=True, num_workers=NUM_WORKERS)
 # LR hyperparams
 ALPHA = 0.1
 BETA = 1
-ETA = 0.1
 
-LAMBDA1 = 1e-2 # rub the crystal ball
+LAMBDA1 = 3 # rub the crystal ball
 LAMBDA2 = 0 # no L2 loss
 
 
@@ -76,8 +76,6 @@ def worker_client_initializer():
 ray.reusables.local_client = ray.Reusable(worker_client_initializer, lambda x: x)
 
 
-# TAU_DELAY = 8
-TAU_DELAY = 0
 @ray.remote(num_return_vals=NUM_WORKER_ITERS)
 def async_compute_lr_grads(worker_idx, X_local, y_local, Wid, tauid, X_shard_idx, X_shard_size,
                            W_shard_size, num_w_shards, n_feats):
@@ -108,12 +106,12 @@ def async_compute_lr_grads(worker_idx, X_local, y_local, Wid, tauid, X_shard_idx
 
         grad = logistic_grad(W_shard, X_slice, y_local, ALPHA)
         wprint("worker {}: computed grad {} for shard {}".format(worker_idx, i, W_shard_idx))
-        yield (W_shard_idx, grad)
+        yield (W_shard_idx, csr_matrix(grad))
 
     print("worker {} finished!".format(worker_idx))
 
 
-# Some block PG code from ps-lite
+# Some Block PG code from wormhole/ps-lite
 # Source: https://github.com/dmlc/wormhole/blob/master/learn/linear
 
 #  w.w = penalty.Solve(eta * w.w - grad[0], eta);
@@ -124,6 +122,9 @@ def async_compute_lr_grads(worker_idx, X_local, y_local, Wid, tauid, X_shard_idx
 #   if (z <= lambda1_ && z >= -lambda1_) return 0;
 #   return (z > 0 ? z - lambda1_ : z + lambda1_) / (eta + lambda2_);
 # }
+
+def nzcols(X):
+    return np.nonzero(X)[0]
 
 def apply_grad(W, g, eta):
     z = eta*W - g
@@ -138,11 +139,11 @@ def retry_get(client, handle):
     """jank"""
     tries = 0
     while True:
+        time.sleep(0.1)
         if tries > CONTAINS_RETRIES:
             raise Exception('halp')
         if client.contains(handle.id()):
             break
-        time.sleep(0.1)
         tries += 1
     return ray.get(handle)
 
@@ -172,12 +173,13 @@ def driver_aggregate(client, worker_idx, W, Wid, W_shard_size, n_feats,
             if not should_apply:
                 continue
 
-            stale_handles = []
-            accum_grad = np.zeros_like(grad)
+            accum_grad = np.zeros(grad.shape)
             for k in range(NUM_WORKERS):
-                handle, grad = W_shard_queues[W_shard_idx, k].pop()
+                _, grad = W_shard_queues[W_shard_idx, k].pop()
                 accum_grad += grad
-                stale_handles.append(handle)
+
+            # necessary because of sparse gradients
+            accum_grad = np.array(accum_grad)[0]
 
             W_range = (W_shard_idx*W_shard_size, min((W_shard_idx+1)*W_shard_size, n_feats))
             new_W_shard = apply_grad(W[range(*W_range)], accum_grad, eta)
@@ -186,9 +188,6 @@ def driver_aggregate(client, worker_idx, W, Wid, W_shard_size, n_feats,
             tau[W_shard_idx] += 1
             client.push(tauid, (W_shard_idx, W_shard_idx+1), np.array(tau[W_shard_idx]))
             W[range(*W_range)] = new_W_shard
-
-        for h in stale_handles:
-            client.delete(h.id())
 
         total_t += 1
         eta = BETA + np.sqrt(total_t) / ALPHA
@@ -232,36 +231,52 @@ def fit_async(X, y):
 
     pool = ThreadPool(NUM_WORKERS)
 
+    X_shards, y_shards = [], []
+    for i in range(NUM_WORKERS):
+        shard_range = (i*X_shard_size, min((i+1)*X_shard_size, n_features))
+        X_shards.append(X[range(*shard_range)])
+        y_shards.append(y[range(*shard_range)])
+
     for mi in range(MAJOR_ITERS):
         print("mi {}, loss {}".format(mi, logistic_loss(W, X, y, ALPHA)))
+        start_timer()
         for i in range(NUM_WORKERS):
             dprint("about to start worker {}".format(i))
-            shard_range = (i*X_shard_size, min((i+1)*X_shard_size, n_features))
-            y_shard = y[range(*shard_range)]
-            X_shard = X[range(*shard_range)]
             iter_handles = async_compute_lr_grads.remote(
-                i, X_shard, y_shard, Wid, tauid, i, X_shard_size, W_shard_size,
+                i, X_shards[i], y_shards[i], Wid, tauid, i, X_shard_size, W_shard_size,
                 NUM_W_SHARDS, # TODO: not always true
                 n_features)
             handle_matrix[i, :] = iter_handles
 
         pool.map(thread_driver_aggregate, range(NUM_WORKERS))
-        print("finished major iter {}".format(mi+1))
+        print("finished major iter {}, time {} (total iters {})".format(
+            mi+1, end_timer(), (mi+1)*MINOR_ITERS))
     print("mi {}, loss {}".format(mi, logistic_loss(W, X, y, ALPHA)))
 
+T_START = 0
+def start_timer():
+    global T_START
+    T_START = time.time()
+
+def end_timer():
+    global T_START
+    return time.time() - T_START
+
+from sklearn.externals.joblib import Memory
+mem = Memory('ddp.cache')
+
+@mem.cache
+def load_data():
+    X_tr, y_tr = load_svmlight_file('data/spam100k.svm')
+    return X_tr, y_tr
+
 if __name__ == '__main__':
-    def load_data():
-        X_tr, y_tr = load_svmlight_file('data/spam1h.svm')
-        return X_tr, y_tr
+    print("starting load")
+    start_timer()
     X_tr_sparse, y_tr = load_data()
-    # X_tr = np.array(X_tr_sparse.todense())  # XXX: huge
+    print("finished load: {}".format(end_timer()))
 
-    # HACK
-    _, n_feats = X_tr_sparse.shape
-    left_over = n_feats % NUM_W_SHARDS
-    X_tr_sparse = X_tr_sparse[:, :-left_over]
-
-    dprint("starting async fit")
+    print("finished load, starting async fit")
     fit_async(X_tr_sparse, y_tr)
 
     # n_samples, n_features = X_tr.shape

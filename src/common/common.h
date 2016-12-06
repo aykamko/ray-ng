@@ -121,6 +121,13 @@ char *sha1_to_hex(const unsigned char *sha1, char *buffer);
 
 typedef unique_id object_id;
 
+#define print_object_id(obid) \
+  for (int i = 0; i < 9; i++) { \
+    printf("%d, ", object_id.id[i]); \
+  } \
+  printf("%d", object_id.id[9]);
+
+
 /**
  * Compare two object IDs.
  *

@@ -81,6 +81,7 @@ void add_object_to_lru_cache(eviction_state *eviction_state,
   released_object_entry *hash_table_entry;
   HASH_FIND(handle, eviction_state->released_object_table, &object_id,
             sizeof(object_id), hash_table_entry);
+
   CHECK(hash_table_entry == NULL);
   /* Add the object ID to the hash table. */
   hash_table_entry = malloc(sizeof(released_object_entry));

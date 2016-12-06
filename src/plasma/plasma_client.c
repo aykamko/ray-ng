@@ -575,35 +575,11 @@ int plasma_wait(plasma_connection *conn,
   req->num_ready_objects = num_returns;
   req->timeout = timeout;
 
-  printf("waiting for %d %d %d %d %d %d %d %d %d %d\n",
-      object_ids[0].id[0],
-      object_ids[0].id[1],
-      object_ids[0].id[2],
-      object_ids[0].id[3],
-      object_ids[0].id[4],
-      object_ids[0].id[5],
-      object_ids[0].id[6],
-      object_ids[0].id[7],
-      object_ids[0].id[8],
-      object_ids[0].id[9]);
-
   CHECK(plasma_send_request(conn->manager_conn, PLASMA_WAIT, req) >= 0);
   plasma_free_request(req);
   int64_t return_size = plasma_reply_size(num_returns);
   plasma_reply *reply = malloc(return_size);
   CHECK(plasma_receive_reply(conn->manager_conn, return_size, reply) >= 0);
-
-  printf("finished wait for %d %d %d %d %d %d %d %d %d %d\n",
-      object_ids[0].id[0],
-      object_ids[0].id[1],
-      object_ids[0].id[2],
-      object_ids[0].id[3],
-      object_ids[0].id[4],
-      object_ids[0].id[5],
-      object_ids[0].id[6],
-      object_ids[0].id[7],
-      object_ids[0].id[8],
-      object_ids[0].id[9]);
 
   for (int i = 0; i < num_returns; ++i) {
     return_object_ids[i] = reply->object_requests[i].object_id;
@@ -1005,7 +981,6 @@ void plasma_init_kvstore(plasma_connection *conn,
   // create kv_metadata shard
   int64_t shard_id_bytes = num_shards * sizeof(object_id);
   int64_t shard_sizes_bytes = num_shards * sizeof(uint64_t);
-  /* int64_t shard_datum_ptr_bytes = num_shards * sizeof(void *); */
   int64_t matrix_ndims = ndims * sizeof(uint64_t);
 
   int64_t kv_data_size = (2 * sizeof(uint64_t)) // num_shards, n_dims
@@ -1034,8 +1009,6 @@ void plasma_init_kvstore(plasma_connection *conn,
 
   memcpy(kv_data, shard_sizes, shard_sizes_bytes); // write shard sizes
   kv_data += shard_sizes_bytes;
-  /*  */
-  /* memcpy(kv_data, shard_datum, shard_datum_ptr_bytes); // write shard object_ids */
 
   plasma_seal(conn, kv_object_id);
 }
@@ -1097,8 +1070,7 @@ void plasma_pull(plasma_connection *conn,
   result->shard_sizes = &shard_sizes[start_axis_i];
   result->start_axis_idx = start_axis_i;
 
-  /* int is_fetched[result->result_num_shards]; */
-  /* plasma_fetch(conn, result->result_num_shards, result->shard_ids, is_fetched); */
+  plasma_release(conn, kv_object_id);
 }
 
 void plasma_push(plasma_connection *conn,
@@ -1116,7 +1088,6 @@ void plasma_push(plasma_connection *conn,
   for (int i = 0; i < result.ndim; i++) axis_units *= result.shape[i];
   axis_units /= result.shape[shard_axis];
 
-  // TODO Error checking, make sure we can actually do this
   uint64_t start = (range_start * axis_units) % result.shard_sizes[0];
   uint64_t copy_size = result.shard_sizes[0] - start;
   copy_size = min(copy_size, size);
@@ -1130,6 +1101,7 @@ void plasma_push(plasma_connection *conn,
 
   for (uint64_t i = 1; i < result.result_num_shards; i++) {
     memcpy(addr, data, copy_size * 8);
+    plasma_release(conn, result.shard_ids[i-1]);
 
     size -= copy_size;
     data += copy_size * 8;
@@ -1140,6 +1112,7 @@ void plasma_push(plasma_connection *conn,
     copy_size = min(result.shard_sizes[i], size);
   }
   memcpy(addr, data, copy_size * 8);
+  plasma_release(conn, result.shard_ids[result.result_num_shards-1]);
 
   size -= copy_size;
   data += copy_size * 8;
