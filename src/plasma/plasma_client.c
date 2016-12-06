@@ -1088,32 +1088,46 @@ void plasma_push(plasma_connection *conn,
   for (int i = 0; i < result.ndim; i++) axis_units *= result.shape[i];
   axis_units /= result.shape[shard_axis];
 
-  uint64_t start = (range_start * axis_units) % result.shard_sizes[0];
-  uint64_t copy_size = result.shard_sizes[0] - start;
-  copy_size = min(copy_size, size);
+  uint64_t mutate_start = (range_start * axis_units) % result.shard_sizes[0];
+  uint64_t mutate_size = result.shard_sizes[0] - mutate_start;
+  mutate_size = min(mutate_size, size);
 
   int64_t shard_size;
-  void *shard_data;
-  void *addr;
+  void *old_shard_data;
+  void *new_shard_data;
+  void *old_start_addr;
+  void *new_start_addr;
+  object_id new_id;
 
-  plasma_get(conn, result.shard_ids[0], &shard_size, (uint8_t *)&shard_data, NULL, NULL);
-  addr = shard_data + (start * 8);
+  plasma_get(conn, result.shard_ids[0], &shard_size, (uint8_t *)&old_shard_data, NULL, NULL);
+  new_id = globally_unique_id();
+  result.shard_ids[0] = new_id;
+  plasma_create(conn, new_id, shard_size, NULL, 0, (uint8_t *)&new_shard_data);
+  old_start_addr = old_shard_data + (mutate_start * 8);
+  new_start_addr = new_shard_data + (mutate_start * 8);
 
   for (uint64_t i = 1; i < result.result_num_shards; i++) {
-    memcpy(addr, data, copy_size * 8);
+    memcpy(new_shard_data, old_shard_data, new_start_addr - new_shard_data); // copy old data
+    memcpy(new_start_addr, data, mutate_size * 8); // mutate with new data
     plasma_release(conn, result.shard_ids[i-1]);
+    plasma_seal(conn, new_id);
 
-    size -= copy_size;
-    data += copy_size * 8;
+    size -= mutate_size;
+    data += mutate_size * 8;
 
-    plasma_get(conn, result.shard_ids[i], &shard_size, (uint8_t *)&shard_data, NULL, NULL);
-    addr = shard_data;
+    plasma_get(conn, result.shard_ids[i], &shard_size, (uint8_t *)&old_shard_data, NULL, NULL);
+    new_id = globally_unique_id();
+    result.shard_ids[i] = new_id;
+    plasma_create(conn, new_id, shard_size, NULL, 0, (uint8_t *)&new_shard_data);
+    old_start_addr = old_shard_data;
+    new_start_addr = new_shard_data;
 
-    copy_size = min(result.shard_sizes[i], size);
+    mutate_size = min(result.shard_sizes[i], size);
   }
-  memcpy(addr, data, copy_size * 8);
+  uint64_t left_over = (result.shard_sizes[result.result_num_shards-1] - mutate_size) * 8;
+  memcpy(new_start_addr, data, mutate_size*8);
+  memcpy(new_start_addr + mutate_size * 8, old_start_addr + mutate_size * 8,
+      left_over);
   plasma_release(conn, result.shard_ids[result.result_num_shards-1]);
-
-  size -= copy_size;
-  data += copy_size * 8;
+  plasma_seal(conn, new_id);
 }
