@@ -13,8 +13,14 @@ ShardedLDAModel = sklearn.decomposition.LatentDirichletAllocation
 
 sharded_model = ShardedLDAModel(n_topics=20, n_jobs=8, max_iter=100,
                                 learning_method='batch', evaluate_every=10,
-                                verbose=1)
+                                verbose=0)
 
-t_start = time.time()
-sharded_model.fit(X)
-print("scipy: duration {} s".format(time.time() - t_start))
+times = []
+for _ in range(10):
+    global_t_start = time.time()
+
+# t_start = time.time()
+    sharded_model.fit(X)
+    times.append(time.time() - global_t_start)
+# print("scipy: duration {} s".format(time.time() - t_start))
+print times

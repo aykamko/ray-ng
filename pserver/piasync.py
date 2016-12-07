@@ -5,7 +5,7 @@ import time
 from plasma import PlasmaClient
 
 NUM_WORKERS = 10
-NUM_ITER = 10000
+NUM_ITER = 1000
 # Start a scheduler, an object store, and some workers.
 addr_info = ray.init(start_ray_local=True, num_workers=NUM_WORKERS)
 
@@ -24,10 +24,10 @@ ray.reusables.local_client = ray.Reusable(worker_client_initializer, lambda x: x
 
 @ray.remote(num_return_vals=NUM_ITER)
 def estimate_pi_yield(n, X_id, X_shard_idx, X_shard_size, n_feats):
-  local_client = ray.reusables.local_client
-  X_range = (X_shard_idx * X_shard_size,
-             min((X_shard_idx + 1) * X_shard_size, n_feats))
-  X_local = local_client.pull(X_id, X_range)
+  # local_client = ray.reusables.local_client
+  # X_range = (X_shard_idx * X_shard_size,
+  #            min((X_shard_idx + 1) * X_shard_size, n_feats))
+  # X_local = local_client.pull(X_id, X_range)
 
   for i in range(NUM_ITER):
     x = np.random.uniform(size=n)
