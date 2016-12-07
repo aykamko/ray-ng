@@ -16,8 +16,8 @@ ray.register_class(csr_matrix)
 from threading import Thread, RLock
 from multiprocessing.pool import ThreadPool
 
-WDEBUG = 1
-DEBUG = 1
+WDEBUG = 3
+DEBUG = 3
 def dprint(thing, level=3):
     if DEBUG >= level:
         print(thing)
@@ -28,11 +28,11 @@ def wprint(thing, level=3):
 # Start ray
 NUM_WORKERS = 4
 MAJOR_ITERS = 1
-MINOR_ITERS = 100
+MINOR_ITERS = 10
 NUM_GLOBAL_ITERS = MAJOR_ITERS * MINOR_ITERS
 TAU_DELAY = 0
 
-NUM_W_SHARDS = 16
+NUM_W_SHARDS = 4
 NUM_WORKER_ITERS = MINOR_ITERS * NUM_W_SHARDS
 
 addr_info = ray.init(start_ray_local=True, num_workers=NUM_WORKERS)
@@ -136,15 +136,15 @@ def apply_grad(W, g, eta):
 CONTAINS_RETRIES = 10000
 def retry_get(client, handle):
     """jank"""
-    tries = 0
-    while True:
-        time.sleep(0.04)
-        if tries > CONTAINS_RETRIES:
-            raise Exception('halp')
-        if client.contains(handle.id()):
-            break
-        tries += 1
-    # ray.wait([handle], timeout=100)
+    # tries = 0
+    # while True:
+    #     time.sleep(0.04)
+    #     if tries > CONTAINS_RETRIES:
+    #         raise Exception('halp')
+    #     if client.contains(handle.id()):
+    #         break
+    #     tries += 1
+    ray.wait([handle])
     return ray.get(handle)
 
 TOTAL_RECIEVED = 0
