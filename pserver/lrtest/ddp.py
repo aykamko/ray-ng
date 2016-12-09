@@ -1,5 +1,6 @@
 import time
 import ray
+import ray.worker
 import numpy as np
 
 from plasma import PlasmaClient
@@ -37,7 +38,6 @@ NUM_WORKER_ITERS = MINOR_ITERS * NUM_W_SHARDS
 
 addr_info = ray.init(start_ray_local=True, num_workers=NUM_WORKERS)
 
-
 # LR hyperparams
 ALPHA = 1e-4
 BETA = 1
@@ -71,7 +71,7 @@ def logistic_grad(w, X, y, alpha):
     return grad
 
 def worker_client_initializer():
-    return PlasmaClient(addr_info['object_store_names'][0])
+    return PlasmaClient(addr_info['object_store_names'][0], addr_info["object_store_manager_names"][0])
 ray.reusables.local_client = ray.Reusable(worker_client_initializer, lambda x: x)
 
 
@@ -153,18 +153,22 @@ def driver_aggregate(client, worker_idx, W, Wid, W_shard_size, n_feats,
                      eta, total_t, tau, tauid):
     global TOTAL_RECIEVED
 
+    aclient = worker_client_initializer()
+    aworker = ray.worker.Worker()
+    aworker.plasma_client = aclient
+
     dprint("started aggregate for worker {}".format(worker_idx))
     for i in range(NUM_WORKER_ITERS):
         handle = worker_handles[i]
         dprint("aggreg {} waiting for grad {} ({})".format(worker_idx, i, map(ord, handle.id()[:10])))
-        result = retry_get(client, handle)
+        result = aworker.get_object(handle)
         TOTAL_RECIEVED += 1
         W_shard_idx, grad = result
         dprint("(TOTAL {}) aggreg {}, recieved grad {} for shard {}".format(
             TOTAL_RECIEVED, worker_idx, i, W_shard_idx))
 
         with W_shard_locks[W_shard_idx]:
-            W_shard_queues[W_shard_idx, worker_idx].append((handle, grad))
+            W_shard_queues[W_shard_idx, worker_idx].append(grad)
 
             nonempty_slots = [len(W_shard_queues[W_shard_idx, j]) > 0 for j in range(NUM_WORKERS)]
             should_apply = all(nonempty_slots)
@@ -175,7 +179,7 @@ def driver_aggregate(client, worker_idx, W, Wid, W_shard_size, n_feats,
 
             accum_grad = np.zeros(grad.shape)
             for k in range(NUM_WORKERS):
-                _, grad = W_shard_queues[W_shard_idx, k].pop()
+                grad = W_shard_queues[W_shard_idx, k].pop()
                 accum_grad += grad
 
             # necessary because of sparse gradients
